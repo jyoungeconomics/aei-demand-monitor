@@ -180,9 +180,10 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Hide sidebar collapse button to prevent losing sidebar */
-      button[data-testid="collapseSidebarButton"] {{
-          display: none;
+      /* Keep sidebar visible and accessible */
+      [data-testid="stSidebar"] {{
+          visibility: visible !important;
+          display: block !important;
       }}
       .aei-title {{
           color: {AEI["navy"]};
@@ -216,24 +217,24 @@ st.markdown(
 # Header with logo and title
 col1, col2 = st.columns([1, 6])
 with col1:
-    # Try to find and display watermark from multiple possible paths
+    # Try to find and display AEI logo from multiple possible paths
     logo_found = False
     for logo_candidate in [
-        os.path.join(os.path.dirname(__file__), "aei_watermark.png"),
-        os.path.join(os.getcwd(), "demand_monitor", "aei_watermark.png"),
-        os.path.join(os.getcwd(), "aei_watermark.png"),
         os.path.join(os.path.dirname(__file__), "aei_logo.png"),
         os.path.join(os.getcwd(), "demand_monitor", "aei_logo.png"),
+        os.path.join(os.getcwd(), "aei_logo.png"),
+        os.path.join(os.path.dirname(__file__), "aei_watermark.png"),
+        os.path.join(os.getcwd(), "demand_monitor", "aei_watermark.png"),
     ]:
         if os.path.exists(logo_candidate):
             try:
-                st.image(logo_candidate, width=80)
+                st.image(logo_candidate, width=150)
                 logo_found = True
                 break
             except Exception:
                 pass
     if not logo_found:
-        st.markdown("**AEI**", help="Ag Economic Insights")
+        st.markdown("# AEI", help="Ag Economic Insights")
 
 with col2:
     st.markdown(
@@ -378,18 +379,18 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         else:
             ticker = "ZS=F"  # Soybeans futures
 
+        # Fetch data with appropriate timeout for cloud deployment
         data = yf.Ticker(ticker)
-        # Use shorter timeout for faster feedback in deployed environments
-        hist = data.history(period="1d", timeout=10)
+        hist = data.history(period="1d", timeout=15)
 
-        if not hist.empty:
+        if hist is not None and not hist.empty and "Close" in hist.columns:
             # yfinance returns prices in cents/bu for CBOT contracts
             price_cents = float(hist["Close"].iloc[-1])
-            price_dollars = price_cents / 100.0
-            return price_dollars
+            if price_cents > 0:
+                price_dollars = price_cents / 100.0
+                return price_dollars
     except Exception as e:
-        # Silently fail and fall back to session state
-        # (Helpful for debugging: import streamlit as st; st.write(f"Price fetch error: {e}")
+        # Fail gracefully — will use fallback price
         pass
     return None
 
@@ -457,14 +458,16 @@ with st.sidebar:
     if current_price is not None:
         # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        st.caption(f"ℹ️ Using current {scen_crop} futures ({contract_symbol}) from Yahoo Finance")
+        st.caption(f"✅ Current {scen_crop} futures ({contract_symbol}) from Yahoo Finance")
         # Always update session state with newly fetched price
         st.session_state[spot_key] = default_spot
     elif spot_key not in st.session_state:
         default_spot = round(last_actual, 2)
         st.session_state[spot_key] = default_spot
+        st.caption(f"📊 Using {int(ref['year'])} actual price (live futures unavailable)")
     else:
         default_spot = st.session_state[spot_key]
+        st.caption(f"📊 Using session price (live futures unavailable)")
 
     spot_price = st.number_input(
         "",
