@@ -522,6 +522,15 @@ with st.sidebar:
             last_supply = float(ref["supply"])
             last_usage = float(ref["usage"])
 
+            # Assign relative likelihood: closer to 0 change is more likely
+            def _likelihood(u_delta):
+                if u_delta == 0:
+                    return "Most likely"
+                elif abs(u_delta) <= 100:
+                    return "Possible"
+                else:
+                    return "Less likely"
+
             scenarios = []
             usage_changes = [-200, -100, 0, 100, 200]
             for u_delta in usage_changes:
@@ -530,6 +539,7 @@ with st.sidebar:
                     s_new = u_new * su_spot_implied
                     scenarios.append({
                         "Usage Change": f"{u_delta:+.0f} mil. bu" if u_delta != 0 else "No change",
+                        "Probability": _likelihood(u_delta),
                         "Implied Supply": f"{s_new:,.0f}",
                         "Implied Usage": f"{u_new:,.0f}",
                         "S/U Ratio": f"{su_spot_implied:.3f}",
