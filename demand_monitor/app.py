@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from data import load_crop_data, load_real_prices
 from model import (
@@ -29,17 +30,17 @@ from model import (
 from shapley import run_shapley, verify_decomp
 
 # ---------------------------------------------------------------------------
-# AEI brand palette (from chart_helpers.py)
+# AEI brand palette
 # ---------------------------------------------------------------------------
 AEI = {
-    "green":      "#609D42",   # primary brand green  → actual price, supply tightening
-    "navy":       "#001425",   # navy                 → supply impact bars
-    "orange":     "#F28C28",   # burnt orange         → demand impact bars
+    "green":      "#609D42",   # primary brand green  → actual price, supply effect
+    "navy":       "#001425",   # navy                 → supply bars, data points
+    "orange":     "#F28C28",   # burnt orange         → total change marker, scenario star
     "gray":       "#A7A9AC",   # light gray           → gridlines / secondary text
-    "teal":       "#3B8B8B",   # teal                 → predicted price
+    "teal":       "#3B8B8B",   # teal                 → predicted price line
     "red":        "#C0504D",   # soft red             → negative / warning
-    "steel":      "#4F81BD",   # steel blue           → S/U ratio
-    "dark_green": "#508428",   # deeper green         → baseline reference
+    "steel":      "#4F81BD",   # steel blue           → unused (kept for reference)
+    "dark_green": "#508428",   # deeper green         → unused (kept for reference)
 }
 
 # ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Inject a thin brand-green top bar and tighten default padding
+# Inject thin brand-navy top bar and tighten padding
 st.markdown(
     f"""
     <style>
@@ -86,7 +87,7 @@ st.markdown(
 
 st.markdown(
     f'<p class="aei-title">🌽 Corn & Soybean Demand Monitor</p>'
-    f'<p class="aei-sub">American Enterprise Institute &nbsp;|&nbsp; '
+    f'<p class="aei-sub">Ag Economic Insights &nbsp;|&nbsp; '
     f'Constant elasticity of demand model &nbsp;|&nbsp; '
     f'Base year: {BASE_YEAR} &nbsp;|&nbsp; Prices in real 2025 dollars</p>',
     unsafe_allow_html=True,
@@ -106,8 +107,8 @@ def load_all(crop: str, elasticity: float, b0: float, b1: float):
     return df, results
 
 
-corn_df,  corn_res  = load_all("corn",     CORN_ELASTICITY,    CORN_OLS_INTERCEPT,    CORN_OLS_SLOPE)
-soy_df,   soy_res   = load_all("soybeans", SOYBEAN_ELASTICITY, SOYBEAN_OLS_INTERCEPT, SOYBEAN_OLS_SLOPE)
+corn_df, corn_res = load_all("corn",     CORN_ELASTICITY,    CORN_OLS_INTERCEPT,    CORN_OLS_SLOPE)
+soy_df,  soy_res  = load_all("soybeans", SOYBEAN_ELASTICITY, SOYBEAN_OLS_INTERCEPT, SOYBEAN_OLS_SLOPE)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +116,7 @@ soy_df,   soy_res   = load_all("soybeans", SOYBEAN_ELASTICITY, SOYBEAN_OLS_INTER
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.markdown(f"### 🔧 What-If Scenario")
+    st.markdown("### 🔧 What-If Scenario")
     st.caption(
         "Plug in your own supply and usage numbers — "
         "the model instantly shows the implied price."
@@ -127,22 +128,16 @@ with st.sidebar:
     if scen_crop == "Corn":
         ref = corn_res.iloc[-1]
         e, b0, b1 = CORN_ELASTICITY, CORN_OLS_INTERCEPT, CORN_OLS_SLOPE
-        df_full   = corn_df
-        res_full  = corn_res
-        unit      = "mil. bu"
-        crop_key  = "corn"
+        df_full  = corn_df
     else:
         ref = soy_res.iloc[-1]
         e, b0, b1 = SOYBEAN_ELASTICITY, SOYBEAN_OLS_INTERCEPT, SOYBEAN_OLS_SLOPE
-        df_full   = soy_df
-        res_full  = soy_res
-        unit      = "mil. bu"
-        crop_key  = "soybeans"
+        df_full  = soy_df
 
     default_s = float(round(ref["supply"]))
     default_u = float(round(ref["usage"]))
 
-    st.markdown(f"**Adjust supply & use** ({unit})")
+    st.markdown("**Adjust supply & use** (mil. bu)")
     scen_supply = st.number_input(
         "Total Supply", min_value=100.0, max_value=900_000.0,
         value=default_s, step=50.0, format="%.0f",
@@ -154,10 +149,7 @@ with st.sidebar:
         help="Feed + FSI/Crush + exports (million bushels)",
     )
 
-    scen_su = scen_supply / scen_usage
-    G_scen  = compute_g(scen_supply, scen_usage, e)
-
-    # Ratio-method prediction (no spot price needed)
+    G_scen     = compute_g(scen_supply, scen_usage, e)
     base_row   = df_full[df_full["year"] == BASE_YEAR].iloc[0]
     G_base_val = compute_g(float(base_row["supply"]), float(base_row["usage"]), e)
     P_base_val = float(df_full[df_full["year"] == BASE_YEAR]["price_real"].values[0])
@@ -170,14 +162,14 @@ with st.sidebar:
         f'<span style="font-size:1.4rem; font-weight:700; color:{AEI["navy"]}">'
         f"${ratio_pred:.2f}<small>/bu</small></span><br>"
         f'<span style="color:{AEI["gray"]}; font-size:0.78rem;">'
-        f"S/U Ratio: {scen_su:.4f} &nbsp;|&nbsp; G index: {G_scen:.4f}"
+        f"G index: {G_scen:.4f}"
         f"</span></div>",
         unsafe_allow_html=True,
     )
 
-    last_actual = float(ref["price_real"])
+    last_actual     = float(ref["price_real"])
     delta_vs_actual = ratio_pred - last_actual
-    sign = "+" if delta_vs_actual >= 0 else ""
+    sign  = "+" if delta_vs_actual >= 0 else ""
     color = AEI["green"] if delta_vs_actual >= 0 else AEI["red"]
     st.markdown(
         f'<span style="color:{color}; font-weight:600;">'
@@ -186,7 +178,6 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # Optional OLS with spot price
     with st.expander("➕ Add a current spot price (OLS method)"):
         scen_spot = st.number_input(
             "Current spot price (2025 real $/bu)",
@@ -194,7 +185,7 @@ with st.sidebar:
             value=last_actual, step=0.10, format="%.2f",
             help="Enter in real 2025 dollars. Use spot price ÷ your deflator if converting from nominal.",
         )
-        K_val  = 100.0 / (G_base_val * P_base_val)
+        K_val   = 100.0 / (G_base_val * P_base_val)
         IV_scen = K_val * G_scen * scen_spot
         ols_pred = b0 + b1 * IV_scen
         st.markdown(
@@ -209,17 +200,42 @@ with st.sidebar:
         "Both return real 2025 $/bu."
     )
 
+# Auto-switch the main content tab to match the sidebar crop selection.
+# Uses a retry loop because Streamlit renders the tabs after this component.
+_tab_idx = 0 if scen_crop == "Corn" else 1
+components.html(
+    f"""
+    <script>
+    (function() {{
+        var attempt = 0;
+        function clickTab() {{
+            var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+            if (tabs.length > {_tab_idx}) {{
+                tabs[{_tab_idx}].click();
+            }} else if (attempt < 15) {{
+                attempt++;
+                setTimeout(clickTab, 100);
+            }}
+        }}
+        clickTab();
+    }})();
+    </script>
+    """,
+    height=0,
+)
+
 
 # ---------------------------------------------------------------------------
 # Chart helpers
 # ---------------------------------------------------------------------------
 
 def fmt2(x):
-    """Format a float to 2 decimal places as a dollar string."""
+    """Format a float as a dollar-rounded-to-2 string."""
     return f"${x:.2f}"
 
 
 def price_chart(results: pd.DataFrame) -> go.Figure:
+    """Time series of actual vs model-predicted price."""
     fig = go.Figure()
     fig.add_scatter(
         x=results["year"], y=results["price_real"].round(2),
@@ -251,6 +267,11 @@ def price_chart(results: pd.DataFrame) -> go.Figure:
 
 
 def shapley_chart(results: pd.DataFrame) -> go.Figure:
+    """
+    Bar chart decomposing the year-over-year price change into supply and usage
+    contributions. Supply bars are navy, usage bars are green.
+    Orange diamonds show the total actual price change.
+    """
     fig = go.Figure()
     fig.add_bar(
         x=results["year"], y=results["supply_impact"].round(2),
@@ -260,15 +281,17 @@ def shapley_chart(results: pd.DataFrame) -> go.Figure:
     )
     fig.add_bar(
         x=results["year"], y=results["demand_impact"].round(2),
-        name="Demand effect",
-        marker_color=AEI["orange"],
-        hovertemplate="<b>%{x}</b><br>Demand: %{y:+.2f}/bu<extra></extra>",
+        name="Usage effect",
+        marker_color=AEI["green"],
+        hovertemplate="<b>%{x}</b><br>Usage: %{y:+.2f}/bu<extra></extra>",
     )
     fig.add_scatter(
         x=results["year"], y=results["dPrice"].round(2),
         mode="markers", name="Total change",
-        marker=dict(color=AEI["green"], size=8, symbol="diamond",
-                    line=dict(width=1, color=AEI["dark_green"])),
+        marker=dict(
+            color=AEI["orange"], size=8, symbol="diamond",
+            line=dict(width=1, color=AEI["navy"]),
+        ),
         hovertemplate="<b>%{x}</b><br>Total: %{y:+.2f}/bu<extra></extra>",
     )
     fig.add_hline(y=0, line_width=1, line_color=AEI["gray"])
@@ -288,74 +311,89 @@ def shapley_chart(results: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def su_chart(results: pd.DataFrame) -> go.Figure:
-    fig = go.Figure()
-    fig.add_scatter(
-        x=results["year"], y=results["su_ratio"].round(4),
-        mode="lines+markers", name="S/U Ratio",
-        line=dict(color=AEI["steel"], width=2),
-        marker=dict(size=5),
-        fill="tozeroy",
-        fillcolor="rgba(79,129,189,0.09)",   # steel blue at ~9% opacity (Plotly 6 compatible)
-        hovertemplate="<b>%{x}</b><br>S/U: %{y:.4f}<extra></extra>",
-    )
-    fig.update_layout(
-        xaxis_title="Marketing Year",
-        yaxis_title="Supply ÷ Total Use",
-        height=280,
-        margin=dict(t=10, b=40, l=60, r=20),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        xaxis=dict(showgrid=False, linecolor=AEI["gray"]),
-        yaxis=dict(gridcolor="#EBEBEB", linecolor=AEI["gray"]),
-        showlegend=False,
-    )
-    return fig
-
-
 def scenario_ellipse_chart(
     results: pd.DataFrame,
-    scenario_su: float,
+    scenario_supply: float,
+    scenario_usage: float,
     scenario_price: float,
+    elasticity: float,
 ) -> go.Figure:
     """
-    Scatter of historical S/U ratio vs real price, with 1σ and 2σ confidence
-    ellipses derived from the covariance matrix (eigenvector decomposition).
+    Supply vs Usage scatterplot with:
+      - Iso-price contour lines (dotted gray) — each line connects all
+        (Supply, Usage) combinations that imply the same model price.
+        Because G = (S/U)^(1/ε), these are straight lines through the origin;
+        in the data window they appear as upward-sloping parallel lines.
+      - 1σ and 2σ confidence ellipses from the covariance of historical
+        supply and usage (eigenvector decomposition).
+      - Historical data points labeled by year.
+      - An orange ★ at the subscriber's scenario.
 
-    The orange star marks the subscriber's scenario from the sidebar.
-    Points inside 1σ represent the most 'normal' market conditions;
-    outside 2σ are historically unusual combinations.
-
-    To produce the ~45° tilted ellipse from the white paper, the axes are
-    visually scaled so that one standard deviation in S/U occupies the same
-    pixel length as one standard deviation in price.
+    Equal-unit axis scaling (scaleratio=1) ensures iso-price lines with
+    slope ~1 appear near 45°, matching the guardrail-writeup charts.
     """
-    hist = results.dropna(subset=["su_ratio", "price_real"])
-    su_vals    = hist["su_ratio"].values
-    price_vals = hist["price_real"].values
-    years      = hist["year"].astype(int).astype(str).values
+    hist        = results.dropna(subset=["supply", "usage", "price_real"])
+    supply_vals = hist["supply"].values
+    usage_vals  = hist["usage"].values
+    years       = hist["year"].astype(int).astype(str).values
 
     # --- Covariance and eigenvector decomposition ---
-    mean_su    = np.mean(su_vals)
-    mean_price = np.mean(price_vals)
-    std_su     = np.std(su_vals, ddof=1)
-    std_price  = np.std(price_vals, ddof=1)
-    cov        = np.cov(su_vals, price_vals)           # 2×2 covariance matrix
-    eigenvalues, eigenvectors = np.linalg.eigh(cov)    # eigenvalues in ascending order
+    mean_s = np.mean(supply_vals)
+    mean_u = np.mean(usage_vals)
+    std_s  = np.std(supply_vals, ddof=1)
+    std_u  = np.std(usage_vals,  ddof=1)
+    cov    = np.cov(supply_vals, usage_vals)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
 
-    # Parametric ellipse: unit circle transformed by sqrt(eigenvalues) and eigenvectors
     theta  = np.linspace(0, 2 * np.pi, 300)
-    circle = np.array([np.cos(theta), np.sin(theta)])  # (2, 300)
+    circle = np.array([np.cos(theta), np.sin(theta)])
 
     def make_ellipse(n_sigma):
-        """Return (x, y) arrays for an n-sigma ellipse."""
         scaled = eigenvectors @ np.diag(n_sigma * np.sqrt(eigenvalues)) @ circle
-        return scaled[0] + mean_su, scaled[1] + mean_price
+        return scaled[0] + mean_s, scaled[1] + mean_u
 
     x_2sig, y_2sig = make_ellipse(2)
     x_1sig, y_1sig = make_ellipse(1)
 
+    # --- Iso-price lines ---
+    # Ratio method: P / P_base = (G / G_base) = ((S/U) / r_base)^(1/ε)
+    # For iso-price at P_target:
+    #   r_target = r_base * (P_target / P_base)^ε      (note: ε < 0)
+    #   iso-price line: U = S / r_target
+    base_rows = hist[hist["year"] == BASE_YEAR]
+    base_row  = base_rows.iloc[0] if not base_rows.empty else hist.iloc[0]
+    r_base    = float(base_row["supply"]) / float(base_row["usage"])
+    P_base    = float(base_row["price_real"])
+
+    prices_hist = hist["price_real"].values
+    p_lo = np.floor(prices_hist.min() * 2) / 2   # nearest $0.50 below min
+    p_hi = np.ceil(prices_hist.max()  * 2) / 2   # nearest $0.50 above max
+    price_levels = np.linspace(p_lo, p_hi, 6)
+
+    s_lo = supply_vals.min() * 0.97
+    s_hi = supply_vals.max() * 1.03
+    u_lo = usage_vals.min()  * 0.95
+    u_hi = usage_vals.max()  * 1.05
+    s_line = np.array([s_lo, s_hi])
+
     fig = go.Figure()
+
+    # Draw iso-price lines first so they sit behind the data
+    for P_target in price_levels:
+        r_target = r_base * (P_target / P_base) ** elasticity
+        u_line   = s_line / r_target
+        # Skip lines that fall entirely outside the visible usage range
+        if u_line.min() > u_hi * 1.1 or u_line.max() < u_lo * 0.9:
+            continue
+        fig.add_scatter(
+            x=s_line, y=u_line,
+            mode="lines",
+            line=dict(color=AEI["gray"], width=1, dash="dot"),
+            name=f"${P_target:.1f}/bu",
+            legendgroup="iso",
+            showlegend=True,
+            hovertemplate=f"Iso-price: ${P_target:.1f}/bu<extra></extra>",
+        )
 
     # 2σ ellipse — outer, light fill
     fig.add_scatter(
@@ -381,7 +419,7 @@ def scenario_ellipse_chart(
 
     # Historical data points labeled by year
     fig.add_scatter(
-        x=su_vals, y=price_vals,
+        x=supply_vals, y=usage_vals,
         mode="markers+text",
         text=years,
         textposition="top center",
@@ -390,18 +428,18 @@ def scenario_ellipse_chart(
         name="Historical",
         hovertemplate=(
             "<b>%{text}</b><br>"
-            "S/U: %{x:.4f}<br>"
-            "Price: $%{y:.2f}/bu"
+            "Supply: %{x:,.0f} mil. bu<br>"
+            "Usage: %{y:,.0f} mil. bu"
             "<extra></extra>"
         ),
     )
 
     # Scenario star
     scenario_label = _ellipse_region_label(
-        scenario_su, scenario_price, mean_su, mean_price, eigenvalues, eigenvectors
+        scenario_supply, scenario_usage, mean_s, mean_u, eigenvalues, eigenvectors
     )
     fig.add_scatter(
-        x=[scenario_su], y=[scenario_price],
+        x=[scenario_supply], y=[scenario_usage],
         mode="markers+text",
         text=[f"Your scenario ({scenario_label})"],
         textposition="bottom center",
@@ -414,33 +452,35 @@ def scenario_ellipse_chart(
         ),
         name="Your scenario",
         hovertemplate=(
-            f"<b>Your Scenario</b><br>"
-            f"S/U: {scenario_su:.4f}<br>"
-            f"Price: ${scenario_price:.2f}/bu<br>"
+            "<b>Your Scenario</b><br>"
+            f"Supply: {scenario_supply:,.0f} mil. bu<br>"
+            f"Usage: {scenario_usage:,.0f} mil. bu<br>"
+            f"Implied price: ${scenario_price:.2f}/bu<br>"
             f"<i>{scenario_label}</i>"
             "<extra></extra>"
         ),
     )
 
-    # Lock the visual aspect ratio so 1 σ of S/U ≈ 1 σ of price on screen.
-    # This produces the ~45° tilted ellipse shown in the white paper.
-    # scaleanchor ties y-axis pixel scale to x-axis; scaleratio sets the
-    # conversion factor: one unit of price = scaleratio units of S/U visually.
-    scale_ratio = std_su / std_price  # data units of S/U per data unit of price
-
+    # Equal-unit axis scaling: 1 mil bu on y-axis = 1 mil bu on x-axis.
+    # This ensures iso-price lines (slope ≈ 1) appear near 45°.
     fig.update_layout(
-        xaxis_title="Supply-to-Use Ratio",
-        yaxis_title="Real Price (2025 $/bu)",
+        xaxis_title="Total Supply (mil. bu)",
+        yaxis_title="Total Usage (mil. bu)",
         height=520,
-        margin=dict(t=20, b=50, l=60, r=20),
+        margin=dict(t=20, b=50, l=70, r=20),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        xaxis=dict(showgrid=False, linecolor=AEI["gray"]),
+        xaxis=dict(
+            showgrid=False,
+            linecolor=AEI["gray"],
+            tickformat=",d",
+        ),
         yaxis=dict(
             gridcolor="#EBEBEB",
             linecolor=AEI["gray"],
+            tickformat=",d",
             scaleanchor="x",
-            scaleratio=scale_ratio,
+            scaleratio=1,
         ),
         legend=dict(
             orientation="h",
@@ -453,18 +493,18 @@ def scenario_ellipse_chart(
 
 
 def _ellipse_region_label(
-    su: float,
-    price: float,
-    mean_su: float,
-    mean_price: float,
+    s: float,
+    u: float,
+    mean_s: float,
+    mean_u: float,
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
 ) -> str:
     """
-    Return a plain-English label indicating whether the point falls inside
-    the 1σ, 2σ, or outside both ellipses.
+    Return a plain-English label for where (supply, usage) falls relative
+    to the historical 1σ / 2σ ellipses.
     """
-    delta       = np.array([su - mean_su, price - mean_price])
+    delta       = np.array([s - mean_s, u - mean_u])
     transformed = eigenvectors.T @ delta
     std_dist    = np.sqrt(np.sum((transformed / np.sqrt(eigenvalues)) ** 2))
 
@@ -482,21 +522,19 @@ def _ellipse_region_label(
 
 def farmer_table(results: pd.DataFrame) -> pd.DataFrame:
     """
-    Return a clean, farmer-friendly summary with plain-English column names.
-    Supply/demand effects tell the grower what drove the price that year.
+    Clean, plain-English summary of year-by-year supply, usage, and price
+    drivers. Columns use farmer-friendly language.
     """
     tbl = results[[
         "year", "price_real", "pred_price",
-        "dPrice", "supply_impact", "demand_impact", "su_ratio",
+        "dPrice", "supply_impact", "demand_impact",
     ]].copy()
 
-    # Round everything sensibly
     tbl["price_real"]    = tbl["price_real"].round(2)
     tbl["pred_price"]    = tbl["pred_price"].round(2)
     tbl["dPrice"]        = tbl["dPrice"].round(2)
     tbl["supply_impact"] = tbl["supply_impact"].round(2)
     tbl["demand_impact"] = tbl["demand_impact"].round(2)
-    tbl["su_ratio"]      = tbl["su_ratio"].round(4)
 
     tbl.rename(columns={
         "year":           "Year",
@@ -504,8 +542,7 @@ def farmer_table(results: pd.DataFrame) -> pd.DataFrame:
         "pred_price":     "Model Price ($/bu)",
         "dPrice":         "Change vs Prior Year ($/bu)",
         "supply_impact":  "Supply Drove ($/bu)",
-        "demand_impact":  "Demand Drove ($/bu)",
-        "su_ratio":       "Supply-to-Use Ratio",
+        "demand_impact":  "Usage Drove ($/bu)",
     }, inplace=True)
 
     return tbl.set_index("Year")
@@ -519,7 +556,8 @@ def render_tab(
     crop_label: str,
     results: pd.DataFrame,
     elasticity: float,
-    scenario_su: float | None = None,
+    scenario_supply: float | None = None,
+    scenario_usage: float | None = None,
     scenario_price: float | None = None,
 ) -> None:
     check = verify_decomp(results)
@@ -544,10 +582,10 @@ def render_tab(
         help="How much of last year's price change came from supply shifts ($/bu, real 2025$)",
     )
     m5.metric(
-        "Demand Effect",
+        "Usage Effect",
         f"{latest['demand_impact']:+.2f}",
         delta=None,
-        help="How much came from demand shifts ($/bu, real 2025$)",
+        help="How much of last year's price change came from usage shifts ($/bu, real 2025$)",
     )
 
     st.markdown("&nbsp;")
@@ -555,28 +593,27 @@ def render_tab(
     # ---- Charts ----
     col_l, col_r = st.columns(2)
     with col_l:
-        st.markdown(f"**Actual vs Model Price** — real 2025 $/bu")
+        st.markdown("**Actual vs Model Price** — real 2025 $/bu")
         st.plotly_chart(price_chart(results), width="stretch")
     with col_r:
-        st.markdown("**What Moved the Price?** — Shapley decomposition")
+        st.markdown("**What Moved the Price?**")
         st.plotly_chart(shapley_chart(results), width="stretch")
 
-    st.markdown("**Supply-to-Use Ratio**")
-    st.plotly_chart(su_chart(results), width="stretch")
-
-    # ---- Scenario confidence ellipse ----
-    if scenario_su is not None and scenario_price is not None:
+    # ---- Scenario supply/usage chart (shown only when scenario is active) ----
+    if scenario_supply is not None and scenario_usage is not None and scenario_price is not None:
         st.markdown("---")
-        st.markdown("**Where Does Your Scenario Fall?** — Historical S/U vs Price")
+        st.markdown("**Where Does Your Scenario Fall?** — Supply & Usage in Context")
         st.caption(
+            "Dotted gray lines are iso-price contours — each line connects every "
+            "(Supply, Usage) combination that implies the same model price. "
             "The shaded regions show 1σ (darker) and 2σ (lighter) of the historical "
-            "supply-to-use / price relationship, derived from the eigenvectors of the "
-            "covariance matrix. "
-            "The ★ marks your scenario from the sidebar. "
-            "Points outside the 2σ ellipse represent historically unusual market conditions."
+            "supply/usage relationship. "
+            "The ★ marks your scenario from the sidebar."
         )
         st.plotly_chart(
-            scenario_ellipse_chart(results, scenario_su, scenario_price),
+            scenario_ellipse_chart(
+                results, scenario_supply, scenario_usage, scenario_price, elasticity
+            ),
             width="stretch",
         )
 
@@ -585,12 +622,13 @@ def render_tab(
     st.markdown("**Year-by-Year Summary**")
     st.caption(
         '"Supply Drove" = how much supply changes alone moved the price that year. '
-        '"Demand Drove" = same for usage/demand. '
+        '"Usage Drove" = same for usage. '
         "Both sum to the total actual price change. Positive = price went up."
     )
     tbl = farmer_table(results)
+
     def _color_impact(val):
-        """Red for negative, green for positive price impacts."""
+        """Green for positive price impacts, red for negative."""
         if val > 0:
             return f"color: {AEI['green']}; font-weight: 600"
         elif val < 0:
@@ -600,14 +638,13 @@ def render_tab(
     st.dataframe(
         tbl.style
         .format({
-            "Actual Price ($/bu)":       "${:.2f}",
-            "Model Price ($/bu)":        "${:.2f}",
+            "Actual Price ($/bu)":         "${:.2f}",
+            "Model Price ($/bu)":          "${:.2f}",
             "Change vs Prior Year ($/bu)": lambda v: f"{v:+.2f}",
-            "Supply Drove ($/bu)":       lambda v: f"{v:+.2f}",
-            "Demand Drove ($/bu)":       lambda v: f"{v:+.2f}",
-            "Supply-to-Use Ratio":       "{:.4f}",
+            "Supply Drove ($/bu)":         lambda v: f"{v:+.2f}",
+            "Usage Drove ($/bu)":          lambda v: f"{v:+.2f}",
         })
-        .map(_color_impact, subset=["Supply Drove ($/bu)", "Demand Drove ($/bu)"]),
+        .map(_color_impact, subset=["Supply Drove ($/bu)", "Usage Drove ($/bu)"]),
         use_container_width=True,
     )
 
@@ -628,8 +665,9 @@ with tab_corn:
         "corn",
         corn_res,
         CORN_ELASTICITY,
-        scenario_su    = scen_su    if scen_crop == "Corn" else None,
-        scenario_price = ratio_pred if scen_crop == "Corn" else None,
+        scenario_supply = scen_supply if scen_crop == "Corn"     else None,
+        scenario_usage  = scen_usage  if scen_crop == "Corn"     else None,
+        scenario_price  = ratio_pred  if scen_crop == "Corn"     else None,
     )
 
 with tab_soy:
@@ -637,6 +675,7 @@ with tab_soy:
         "soybeans",
         soy_res,
         SOYBEAN_ELASTICITY,
-        scenario_su    = scen_su    if scen_crop == "Soybeans" else None,
-        scenario_price = ratio_pred if scen_crop == "Soybeans" else None,
+        scenario_supply = scen_supply if scen_crop == "Soybeans" else None,
+        scenario_usage  = scen_usage  if scen_crop == "Soybeans" else None,
+        scenario_price  = ratio_pred  if scen_crop == "Soybeans" else None,
     )
