@@ -346,17 +346,19 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         response.raise_for_status()
 
         # Extract CBOT price format (e.g., "1154-2" = 1154 and 2/8 cents/bu)
-        # Look for: <span class="last-change" ... lastPrice'>XXXX-Y</span>
+        # Look for the line with lastPrice and extract XXXX-Y format
         import re
-        pattern = r'data-ng-class="highlightValue\(\'lastPrice\'\)">(\d+)-(\d)</span>'
-        match = re.search(pattern, response.text)
-        if match:
-            main = int(match.group(1))
-            frac = int(match.group(2))
-            # CBOT format: XXXX-Y where Y is in eighths (0-7)
-            cents_per_bu = main + frac / 8.0
-            dollars_per_bu = cents_per_bu / 100.0
-            return dollars_per_bu
+        for line in response.text.split('\n'):
+            if 'lastPrice' in line:
+                # Match CBOT price: >1154-2</span> or similar
+                match = re.search(r'>(\d{3,4})-(\d)</span>', line)
+                if match:
+                    main = int(match.group(1))
+                    frac = int(match.group(2))
+                    # CBOT format: XXXX-Y where Y is in eighths (0-7)
+                    cents_per_bu = main + frac / 8.0
+                    dollars_per_bu = cents_per_bu / 100.0
+                    return dollars_per_bu
     except Exception:
         pass
     return None
@@ -366,14 +368,17 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
 # Sidebar — Scenario / "What-If" Tool
 # ---------------------------------------------------------------------------
 
+# Crop selection (will be displayed in main area, accessed here via session_state)
+if "scen_crop" not in st.session_state:
+    st.session_state.scen_crop = "Corn"
+scen_crop = st.session_state.scen_crop
+
 with st.sidebar:
     st.markdown("### 🔧 What-If Scenario")
     st.caption(
         "Enter your own supply, usage, and spot price to see "
-        "what the model implies."
+        "what the model implies. Select crop in the main area above."
     )
-
-    scen_crop = st.radio("Crop", ["Corn", "Soybeans"], horizontal=True)
 
     if scen_crop == "Corn":
         ref       = corn_res.iloc[-1]
@@ -701,7 +706,7 @@ def price_chart(results: pd.DataFrame) -> go.Figure:
     fig.add_scatter(
         x=results["year"], y=results["pred_price"].round(2),
         mode="lines+markers", name="Model",
-        line=dict(color=AEI["teal"], width=2, dash="dash"),
+        line=dict(color="#000000", width=2, dash="dash"),
         marker=dict(size=5),
         hovertemplate="<b>%{x}</b><br>Model: $%{y:.2f}/bu<extra></extra>",
     )
@@ -789,12 +794,14 @@ def scenario_ellipse_chart(
     theta  = np.linspace(0, 2 * np.pi, 300)
     circle = np.array([np.cos(theta), np.sin(theta)])
 
-    def make_ellipse(n_sigma):
-        scaled = eigenvectors @ np.diag(n_sigma * np.sqrt(eigenvalues)) @ circle
+    def make_ellipse(n_sigma, scale=1.0):
+        """Create an ellipse, optionally scaled to account for outliers."""
+        scaled = eigenvectors @ np.diag(n_sigma * scale * np.sqrt(eigenvalues)) @ circle
         return scaled[0] + mean_s, scaled[1] + mean_u
 
-    x_2sig, y_2sig = make_ellipse(2)
-    x_1sig, y_1sig = make_ellipse(1)
+    # Scale up ellipses slightly (1.35x) to account for data outliers and improve visibility
+    x_2sig, y_2sig = make_ellipse(2, scale=1.35)
+    x_1sig, y_1sig = make_ellipse(1, scale=1.35)
 
     # Iso-price lines: U = S / r_target
     base_rows = hist[hist["year"] == BASE_YEAR]
@@ -886,6 +893,7 @@ def scenario_ellipse_chart(
             x=s_line, y=u_line,
             mode="lines",
             line=dict(color=AEI["gray"], width=1, dash="dot"),
+            marker=dict(size=0),
             name=f"${P_target:.1f}/bu",
             legendgroup="iso",
             showlegend=True,
@@ -1201,6 +1209,20 @@ def render_tab(
 # ---------------------------------------------------------------------------
 # Main layout
 # ---------------------------------------------------------------------------
+
+# Crop selection radio button
+col1, col2, col3 = st.columns([1, 2, 2])
+with col1:
+    def _on_crop_change():
+        st.session_state.scen_crop = st.session_state._crop_radio
+    st.radio(
+        "Select Crop",
+        ["Corn", "Soybeans"],
+        key="_crop_radio",
+        on_change=_on_crop_change,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
 tab_corn, tab_soy = st.tabs(["🌽 Corn", "🫘 Soybeans"])
 
