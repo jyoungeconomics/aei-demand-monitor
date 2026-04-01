@@ -425,22 +425,22 @@ with st.sidebar:
     last_actual = float(ref["price_real"])
     spot_key    = f"spot_price_{scen_crop}"
 
-    # Try to fetch current futures price from BarChart
+    # Try to fetch current futures price from Yahoo Finance
     contract_symbol = "ZCZ26" if scen_crop == "Corn" else "ZSX26"
     current_price = _get_futures_price_from_barchart(contract_symbol)
 
-    # Use fetched price if available, otherwise fall back to last actual or session state
+    # Use fetched price if available, otherwise fall back to last actual
     if current_price is not None:
         # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
         st.caption(f"ℹ️ Using current {scen_crop} futures ({contract_symbol}) from Yahoo Finance")
+        # Always update session state with newly fetched price
+        st.session_state[spot_key] = default_spot
     elif spot_key not in st.session_state:
         default_spot = round(last_actual, 2)
-    else:
-        default_spot = float(np.clip(st.session_state[spot_key], 0.50, 50.00))
-
-    if spot_key not in st.session_state:
         st.session_state[spot_key] = default_spot
+    else:
+        default_spot = st.session_state[spot_key]
 
     spot_price = st.number_input(
         "",
