@@ -191,6 +191,14 @@ st.markdown(
           font-size: 0.85rem;
           margin-top: 0;
       }}
+      /* Sidebar styling - ensure content is visible */
+      [data-testid="stSidebar"] {{
+          background-color: white !important;
+          color: {AEI["navy"]} !important;
+      }}
+      [data-testid="stSidebar"] * {{
+          color: {AEI["navy"]} !important;
+      }}
       .scenario-box {{
           background: rgba(96,157,66,0.09);
           border-left: 4px solid {AEI["green"]};
