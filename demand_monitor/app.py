@@ -174,10 +174,11 @@ st.set_page_config(
 st.markdown(
     f"""
     <style>
-      [data-testid="stAppViewContainer"] > .main {{ padding-top: 1rem; }}
+      [data-testid="stAppViewContainer"] > .main {{ padding-top: 0.5rem; }}
       header[data-testid="stHeader"] {{
           background: {AEI["navy"]};
-          height: 4px;
+          height: auto;
+          min-height: 2rem;
       }}
       .aei-title {{
           color: {AEI["navy"]};
@@ -209,11 +210,25 @@ st.markdown(
 )
 
 # Header with logo and title
-logo_path = os.path.join(os.path.dirname(__file__), "aei_logo.png")
 col1, col2 = st.columns([1, 6])
 with col1:
-    if os.path.exists(logo_path):
-        st.image(logo_path, width=80)
+    # Try to find and display logo from multiple possible paths
+    logo_found = False
+    for logo_candidate in [
+        os.path.join(os.path.dirname(__file__), "aei_logo.png"),
+        os.path.join(os.getcwd(), "demand_monitor", "aei_logo.png"),
+        os.path.join(os.getcwd(), "aei_logo.png"),
+    ]:
+        if os.path.exists(logo_candidate):
+            try:
+                st.image(logo_candidate, width=80)
+                logo_found = True
+                break
+            except Exception:
+                pass
+    if not logo_found:
+        st.markdown("**AEI**", help="Ag Economic Insights")
+
 with col2:
     st.markdown(
         f'<p class="aei-title">🌽 Corn & Soybean Demand Monitor</p>'
@@ -358,14 +373,17 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
             ticker = "ZS=F"  # Soybeans futures
 
         data = yf.Ticker(ticker)
-        hist = data.history(period="1d")
+        # Use shorter timeout for faster feedback in deployed environments
+        hist = data.history(period="1d", timeout=10)
 
         if not hist.empty:
             # yfinance returns prices in cents/bu for CBOT contracts
             price_cents = float(hist["Close"].iloc[-1])
             price_dollars = price_cents / 100.0
             return price_dollars
-    except Exception:
+    except Exception as e:
+        # Silently fail and fall back to session state
+        # (Helpful for debugging: import streamlit as st; st.write(f"Price fetch error: {e}")
         pass
     return None
 
@@ -378,6 +396,12 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
 if "scen_crop" not in st.session_state:
     st.session_state.scen_crop = "Corn"
 scen_crop = st.session_state.scen_crop
+
+# Sidebar toggle hint (in case hamburger menu is hidden)
+with st.sidebar:
+    col_menu, col_spacer = st.columns([1, 4])
+    with col_menu:
+        st.markdown("**☰ Sidebar**", help="Click the hamburger menu (☰) at the top-left to toggle this sidebar")
 
 with st.sidebar:
     st.markdown("### 🔧 What-If Scenario")
