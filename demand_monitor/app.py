@@ -180,10 +180,12 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Keep sidebar visible and accessible */
+      /* Ensure sidebar is fully visible and properly sized */
       [data-testid="stSidebar"] {{
           visibility: visible !important;
           display: block !important;
+          min-width: 300px !important;
+          width: 320px !important;
       }}
       .aei-title {{
           color: {AEI["navy"]};
