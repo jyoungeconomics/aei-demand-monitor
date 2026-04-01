@@ -206,38 +206,62 @@ def _synced_input(
 ) -> float:
     """
     Render a paired slider and number_input that stay in sync via session_state.
-    Values are always clamped to [min_val, max_val] to prevent crashes from
-    rapid button clicks.
+    Both widgets are always clamped to [min_val, max_val].
     """
-    # Initialise and clamp — clamping prevents out-of-range errors on fast clicks.
+    # Initialize and clamp main value
     if ss_key not in st.session_state:
         st.session_state[ss_key] = float(init_val)
-    st.session_state[ss_key] = float(
-        np.clip(st.session_state[ss_key], min_val, max_val)
-    )
+
+    try:
+        st.session_state[ss_key] = float(
+            np.clip(st.session_state[ss_key], min_val, max_val)
+        )
+    except (ValueError, TypeError):
+        st.session_state[ss_key] = float(init_val)
 
     _sldr = f"_sldr_{ss_key}"
     _num  = f"_num_{ss_key}"
 
+    # Ensure slider and input state are initialized
+    if _sldr not in st.session_state:
+        st.session_state[_sldr] = int(st.session_state[ss_key])
+    if _num not in st.session_state:
+        st.session_state[_num] = st.session_state[ss_key]
+
     def _from_slider():
-        val = float(np.clip(st.session_state[_sldr], min_val, max_val))
-        st.session_state[ss_key] = val
-        st.session_state.pop(_num, None)
+        try:
+            val = float(st.session_state[_sldr])
+            val = float(np.clip(val, min_val, max_val))
+            st.session_state[ss_key] = val
+            # Explicitly sync the number input to avoid desync on slider move
+            st.session_state[_num] = val
+        except Exception:
+            pass
 
     def _from_input():
-        val = float(np.clip(st.session_state[_num], min_val, max_val))
-        st.session_state[ss_key]  = val
-        st.session_state[_sldr]   = int(val)
+        try:
+            val = float(st.session_state[_num])
+            val = float(np.clip(val, min_val, max_val))
+            st.session_state[ss_key] = val
+            st.session_state[_sldr] = int(val)
+        except Exception:
+            pass
 
     st.markdown(f"**{label}**")
+
+    # Slider: use clamped value
+    slider_val = int(np.clip(st.session_state[ss_key], min_val, max_val))
     st.slider(
         "", min_value=int(min_val), max_value=int(max_val),
-        value=int(st.session_state[ss_key]), step=int(step),
+        value=slider_val, step=int(step),
         key=_sldr, on_change=_from_slider, label_visibility="collapsed",
     )
+
+    # Number input: use clamped value
+    input_val = float(np.clip(st.session_state[ss_key], min_val, max_val))
     st.number_input(
         "", min_value=float(min_val), max_value=float(max_val),
-        value=float(st.session_state[ss_key]), step=float(step), format=fmt,
+        value=input_val, step=float(step), format=fmt,
         key=_num, on_change=_from_input, label_visibility="collapsed",
     )
     return float(st.session_state[ss_key])
@@ -367,10 +391,10 @@ with st.sidebar:
         col_a   = AEI["green"] if delta_actual >= 0 else AEI["red"]
         st.markdown(
             f'<span style="color:{col_m}; font-weight:600; font-size:0.85rem;">'
-            f"{sign_m}${delta_model:.2f} vs your spot price (${spot_price:.2f})"
+            f"{sign_m}${delta_model:.2f} &nbsp; vs your spot price (${spot_price:.2f})"
             f"</span><br>"
             f'<span style="color:{col_a}; font-weight:600; font-size:0.85rem;">'
-            f"{sign_a}${delta_actual:.2f} vs last actual ({int(ref['year'])})"
+            f"{sign_a}${delta_actual:.2f} &nbsp; vs last actual ({int(ref['year'])})"
             f"</span>",
             unsafe_allow_html=True,
         )
@@ -396,11 +420,21 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.markdown("---")
-    st.caption(
-        f"Model: P = P₂₀₀₉ × (G / G₂₀₀₉) &nbsp;|&nbsp; "
-        f"Base year: {BASE_YEAR} &nbsp;|&nbsp; Real 2025 $/bu"
-    )
+    # Inversion feature: show what S/U ratio the spot price implies
+    if G_base_val is not None and G_base_val > 0:
+        try:
+            G_spot_implied = G_base_val * (spot_price / P_base_val)
+            su_spot_implied = G_spot_implied ** e
+            st.markdown("---")
+            st.markdown("💡 **Market's Implied Balance**")
+            st.markdown(
+                f"The market is pricing {scen_crop.lower()} at ${spot_price:.2f}/bu, "
+                f"which implies a supply/usage ratio of **{su_spot_implied:.3f}**. "
+                f"(Historical range: 1.07–1.19)"
+            )
+        except Exception:
+            pass
+
 
 
 # Auto-switch the main content tab to match the sidebar crop selection

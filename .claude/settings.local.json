@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python main.py)",
+      "Bash(python -m pip install pandas openpyxl -q)",
+      "Bash(python -c \":*)",
+      "Bash(python -m pip install streamlit plotly -q)",
+      "Bash(git --version)",
+      "Bash(ls -la *.xlsx SOYBEANS/*.xlsx CORN/*.xlsx)",
+      "Bash(gh pr:*)",
+      "Bash(where gh:*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(where python:*)",
+      "Bash(where streamlit:*)",
+      "Bash(python -m streamlit --version)",
+      "Bash(python -m pip install matplotlib --quiet)",
+      "Bash(python -c \"import matplotlib; print\\(matplotlib.__version__\\)\")"
+    ]
+  }
+}
