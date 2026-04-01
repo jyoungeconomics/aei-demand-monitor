@@ -17,6 +17,11 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
+try:
+    import requests
+except ImportError:
+    requests = None
+
 from data import load_crop_data, load_real_prices
 from model import (
     BASE_YEAR,
@@ -89,19 +94,52 @@ _STATUS_MESSAGE = {
     ),
 }
 
-# Reference table for display in the app (corn price ranges from section 4.2)
-_GUARDRAIL_REF = pd.DataFrame([
+# Reference tables for corn and soybeans (computed from section 4.2)
+_GUARDRAIL_REF_CORN = pd.DataFrame([
     {"S/U Ratio": "> 1.26",    "Market Condition": "Extremely loose",  "Status": "Danger",
-     "Corn Price Signal": "Below $2.50/bu",   "What It Means": "More supply than any year in modern records"},
+     "Price Signal": "Below $2.50/bu",   "What It Means": "More supply than any year in modern records"},
     {"S/U Ratio": "1.19–1.26", "Market Condition": "Loose",            "Status": "Warning",
-     "Corn Price Signal": "$2.50–$3.50/bu",   "What It Means": "Looser than all 25 years of history"},
+     "Price Signal": "$2.50–$3.50/bu",   "What It Means": "Looser than all 25 years of history"},
     {"S/U Ratio": "1.07–1.19", "Market Condition": "Normal",           "Status": "Plausible",
-     "Corn Price Signal": "$3.50–$9.50/bu",   "What It Means": "Within the full 2000–2025 historical band"},
+     "Price Signal": "$3.50–$9.50/bu",   "What It Means": "Within the full 2000–2025 historical band"},
     {"S/U Ratio": "1.02–1.07", "Market Condition": "Tight",            "Status": "Warning",
-     "Corn Price Signal": "$9.50–$11.00/bu",  "What It Means": "Only the 2012 drought came close to this"},
+     "Price Signal": "$9.50–$11.00/bu",  "What It Means": "Only the 2012 drought came close to this"},
     {"S/U Ratio": "< 1.02",    "Market Condition": "Extremely tight",  "Status": "Danger",
-     "Corn Price Signal": "Above $11.00/bu",  "What It Means": "No historical precedent — supply nearly equal to usage"},
+     "Price Signal": "Above $11.00/bu",  "What It Means": "No historical precedent — supply nearly equal to usage"},
 ])
+
+def _compute_soybean_guardrail_table():
+    """Compute soybean price ranges for each S/U ratio band."""
+    hist = soy_res.dropna(subset=["su_ratio", "price_real"])
+    su_vals = hist["su_ratio"].values
+    price_vals = hist["price_real"].values
+
+    def price_range_for_su(su_lo, su_hi):
+        """Find price range when S/U is between su_lo and su_hi."""
+        if su_lo is None:
+            mask = su_vals <= su_hi
+        elif su_hi is None:
+            mask = su_vals >= su_lo
+        else:
+            mask = (su_vals >= su_lo - 0.01) & (su_vals <= su_hi + 0.01)
+
+        if mask.any():
+            prices = price_vals[mask]
+            return f"${prices.min():.1f}–${prices.max():.1f}/bu"
+        return "–"
+
+    return pd.DataFrame([
+        {"S/U Ratio": "> 1.26",    "Market Condition": "Extremely loose",  "Status": "Danger",
+         "Price Signal": price_range_for_su(1.26, None),   "What It Means": "More supply than any year in modern records"},
+        {"S/U Ratio": "1.19–1.26", "Market Condition": "Loose",            "Status": "Warning",
+         "Price Signal": price_range_for_su(1.19, 1.26),   "What It Means": "Looser than all 25 years of history"},
+        {"S/U Ratio": "1.07–1.19", "Market Condition": "Normal",           "Status": "Plausible",
+         "Price Signal": price_range_for_su(1.07, 1.19),   "What It Means": "Within the full 2000–2025 historical band"},
+        {"S/U Ratio": "1.02–1.07", "Market Condition": "Tight",            "Status": "Warning",
+         "Price Signal": price_range_for_su(1.02, 1.07),   "What It Means": "Only the 2012 drought came close to this"},
+        {"S/U Ratio": "< 1.02",    "Market Condition": "Extremely tight",  "Status": "Danger",
+         "Price Signal": price_range_for_su(None, 1.02),   "What It Means": "No historical precedent — supply nearly equal to usage"},
+    ])
 
 
 def get_guardrail_status(su_ratio: float) -> tuple[str, str, str, str]:
@@ -335,8 +373,23 @@ with st.sidebar:
     st.markdown("**Spot / Futures Price ($/bu)**")
     last_actual = float(ref["price_real"])
     spot_key    = f"spot_price_{scen_crop}"
+
+    # Try to fetch current futures price from BarChart
+    contract_symbol = "ZCZ26" if scen_crop == "Corn" else "ZSX26"
+    current_price = _get_futures_price_from_barchart(contract_symbol)
+
+    # Use fetched price if available, otherwise fall back to last actual or session state
+    if current_price is not None:
+        default_spot = round(current_price, 2)
+        st.caption(f"ℹ️ Using current {scen_crop} futures ({contract_symbol}) from BarChart")
+    elif spot_key not in st.session_state:
+        default_spot = round(last_actual, 2)
+    else:
+        default_spot = float(st.session_state[spot_key])
+
     if spot_key not in st.session_state:
-        st.session_state[spot_key] = round(last_actual, 2)
+        st.session_state[spot_key] = default_spot
+
     spot_price = st.number_input(
         "",
         min_value=0.50,
@@ -346,8 +399,8 @@ with st.sidebar:
         format="%.2f",
         key=f"_spot_num_{scen_crop}",
         label_visibility="collapsed",
-        help="Enter today's cash price or a futures contract price (e.g., Dec corn). "
-             "Used to compare the market's signal to what the model implies from supply and usage.",
+        help="Enter the current cash price, Dec/Nov futures, or your own price expectation. "
+             "The model compares this market signal to its supply/usage prediction.",
     )
     st.session_state[spot_key] = spot_price
 
@@ -420,7 +473,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # Inversion feature: show what S/U ratio the spot price implies
+    # Inversion feature: show what S/U ratio the spot price implies, plus example S & U pairs
     if G_base_val is not None and G_base_val > 0:
         try:
             G_spot_implied = G_base_val * (spot_price / P_base_val)
@@ -432,6 +485,33 @@ with st.sidebar:
                 f"which implies a supply/usage ratio of **{su_spot_implied:.3f}**. "
                 f"(Historical range: 1.07–1.19)"
             )
+
+            # Show example (S, U) pairs that would hit this ratio
+            last_supply = float(ref["supply"])
+            last_usage = float(ref["usage"])
+
+            scenarios = []
+            usage_changes = [-200, -100, 0, 100, 200]
+            for u_delta in usage_changes:
+                u_new = last_usage + u_delta
+                if u_new > 0:
+                    s_new = u_new * su_spot_implied
+                    scenarios.append({
+                        "Usage Change": f"{u_delta:+.0f} mil. bu" if u_delta != 0 else "No change",
+                        "Implied Supply": f"{s_new:,.0f}",
+                        "Implied Usage": f"{u_new:,.0f}",
+                        "S/U Ratio": f"{su_spot_implied:.3f}",
+                    })
+
+            if scenarios:
+                with st.expander("📋 Example (Supply, Usage) scenarios to achieve this price"):
+                    st.caption(
+                        f"If usage changes relative to last year ({int(last_usage):,} mil. bu), "
+                        f"here's what supply would need to be to maintain a {su_spot_implied:.3f} ratio "
+                        f"(and thus a ${spot_price:.2f}/bu price):"
+                    )
+                    scenario_df = pd.DataFrame(scenarios)
+                    st.dataframe(scenario_df, use_container_width=True, hide_index=True)
         except Exception:
             pass
 
@@ -769,8 +849,8 @@ def scenario_ellipse_chart(
         mode="lines",
         line=dict(color="rgba(96,157,66,0.45)", width=1.5, dash="dot"),
         fill="toself",
-        fillcolor="rgba(96,157,66,0.0)",
-        name="2σ region",
+        fillcolor="rgba(96,157,66,0.08)",
+        name="2σ region (95% historical)",
         hoverinfo="skip",
     )
     fig.add_scatter(
@@ -778,8 +858,8 @@ def scenario_ellipse_chart(
         mode="lines",
         line=dict(color="rgba(96,157,66,0.80)", width=1.5),
         fill="toself",
-        fillcolor="rgba(96,157,66,0.0)",
-        name="1σ region",
+        fillcolor="rgba(96,157,66,0.15)",
+        name="1σ region (68% historical)",
         hoverinfo="skip",
     )
 
@@ -921,15 +1001,51 @@ def farmer_table(
 # Guardrail reference table display
 # ---------------------------------------------------------------------------
 
-def render_guardrail_table() -> None:
+def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
+    """
+    Scrape current futures price from BarChart.
+    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
+    Returns the last price as a float, or None if scraping fails.
+    """
+    if not requests:
+        return None
+    try:
+        url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        response = requests.get(url, timeout=5, headers=headers)
+        response.raise_for_status()
+
+        # Try to extract the price from the HTML
+        # Look for lastPrice in JSON-like format
+        import re
+        pattern = r'"lastPrice":"?([\d.]+)"?'
+        matches = re.findall(pattern, response.text)
+        if matches:
+            return float(matches[0])
+    except Exception:
+        pass
+    return None
+
+
+def render_guardrail_table(crop_name: str) -> None:
     """Show the historical S/U ratio reference table in an expander."""
     with st.expander("📊 Historical Market Balance Reference (S/U Ratio Guide)", expanded=False):
         st.caption(
             "The supply-to-usage (S/U) ratio is the single most important number "
             "in this model. It measures how much total supply there is relative to "
-            "total usage. Over the past 25 years of corn markets, this ratio has "
+            "total usage. Over the past 25 years of markets, this ratio has "
             "stayed in a narrow band — use the table below to put any scenario in context."
         )
+
+        # Show crop-specific table
+        if crop_name.lower() == "soybeans":
+            tbl = _compute_soybean_guardrail_table()
+            crop_label = "Soybeans"
+        else:
+            tbl = _GUARDRAIL_REF_CORN
+            crop_label = "Corn"
 
         def _row_style(row):
             status = row["Status"]
@@ -937,7 +1053,7 @@ def render_guardrail_table() -> None:
             return [f"background-color: {color}18; color: {AEI['navy']}" for _ in row]
 
         styled = (
-            _GUARDRAIL_REF.style
+            tbl.style
             .apply(_row_style, axis=1)
             .set_properties(**{"text-align": "left"})
             .hide(axis="index")
@@ -945,9 +1061,8 @@ def render_guardrail_table() -> None:
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
         st.caption(
-            "⚠️ Price ranges shown are for corn. Soybean prices are roughly "
-            "2.5–3× higher but follow the same S/U logic. "
-            "Source: USDA WASDE 2000–2025; AEI Demand Model."
+            f"Historical price ranges are actual {crop_label.lower()} prices from USDA "
+            f"(2000–2025, real 2025 dollars). Source: WASDE & AEI Demand Model."
         )
 
 
@@ -1002,24 +1117,6 @@ def render_tab(
         st.markdown("**What Moved the Price?**")
         st.plotly_chart(shapley_chart(results), width="stretch")
 
-    # ---- Scenario supply/usage chart ----
-    if scenario_supply is not None and scenario_usage is not None and scenario_price is not None:
-        st.markdown("---")
-        st.markdown("**Where Does Your Scenario Fall?** — Supply & Usage in Context")
-        st.caption(
-            "The shaded background shows market balance zones based on 25 years of history: "
-            "green = normal range, yellow = unusual, red = no historical precedent. "
-            "Dotted gray lines connect every (Supply, Usage) pair that implies the same model price. "
-            "The ovals show 1σ and 2σ of the historical supply/usage relationship. "
-            "The ★ marks your scenario."
-        )
-        st.plotly_chart(
-            scenario_ellipse_chart(
-                results, scenario_supply, scenario_usage, scenario_price, elasticity
-            ),
-            width="stretch",
-        )
-
     # ---- Summary table ----
     st.markdown("---")
     st.markdown("**Year-by-Year Summary**")
@@ -1057,7 +1154,25 @@ def render_tab(
     )
 
     # ---- Historical S/U reference table ----
-    render_guardrail_table()
+    render_guardrail_table(crop_label)
+
+    # ---- Scenario supply/usage chart ----
+    if scenario_supply is not None and scenario_usage is not None and scenario_price is not None:
+        st.markdown("---")
+        st.markdown("**Where Does Your Scenario Fall?** — Supply & Usage in Context")
+        st.caption(
+            "The shaded background shows market balance zones based on 25 years of history: "
+            "green = normal range, yellow = unusual, red = no historical precedent. "
+            "Dotted gray lines connect every (Supply, Usage) pair that implies the same model price. "
+            "The ovals show 1σ and 2σ of the historical supply/usage relationship. "
+            "The ★ marks your scenario."
+        )
+        st.plotly_chart(
+            scenario_ellipse_chart(
+                results, scenario_supply, scenario_usage, scenario_price, elasticity
+            ),
+            width="stretch",
+        )
 
 
 # ---------------------------------------------------------------------------
