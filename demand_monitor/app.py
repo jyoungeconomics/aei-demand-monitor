@@ -180,13 +180,7 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Ensure sidebar is fully visible and properly sized */
-      [data-testid="stSidebar"] {{
-          visibility: visible !important;
-          display: block !important;
-          min-width: 300px !important;
-          width: 320px !important;
-      }}
+      /* Ensure sidebar is accessible - restore collapse button and normal behavior */
       .aei-title {{
           color: {AEI["navy"]};
           font-size: 1.7rem;
