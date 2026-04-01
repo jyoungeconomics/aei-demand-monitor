@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -72,7 +73,7 @@ st.markdown(
           margin-top: 0;
       }}
       .scenario-box {{
-          background: {AEI["green"]}18;
+          background: rgba(96,157,66,0.09);
           border-left: 4px solid {AEI["green"]};
           border-radius: 4px;
           padding: 0.75rem 1rem;
@@ -295,7 +296,7 @@ def su_chart(results: pd.DataFrame) -> go.Figure:
         line=dict(color=AEI["steel"], width=2),
         marker=dict(size=5),
         fill="tozeroy",
-        fillcolor=f"{AEI['steel']}18",
+        fillcolor="rgba(79,129,189,0.09)",   # steel blue at ~9% opacity (Plotly 6 compatible)
         hovertemplate="<b>%{x}</b><br>S/U: %{y:.4f}<extra></extra>",
     )
     fig.update_layout(
@@ -310,6 +311,155 @@ def su_chart(results: pd.DataFrame) -> go.Figure:
         showlegend=False,
     )
     return fig
+
+
+def scenario_ellipse_chart(
+    results: pd.DataFrame,
+    scenario_su: float,
+    scenario_price: float,
+) -> go.Figure:
+    """
+    Scatter of historical S/U ratio vs real price, with 1σ and 2σ confidence
+    ellipses derived from the covariance matrix (eigenvector decomposition).
+
+    The orange star marks the subscriber's scenario from the sidebar.
+    Points inside 1σ represent the most 'normal' market conditions;
+    outside 2σ are historically unusual combinations.
+    """
+    hist = results.dropna(subset=["su_ratio", "price_real"])
+    su_vals    = hist["su_ratio"].values
+    price_vals = hist["price_real"].values
+    years      = hist["year"].astype(int).astype(str).values
+
+    # --- Covariance and eigenvector decomposition ---
+    mean_su    = np.mean(su_vals)
+    mean_price = np.mean(price_vals)
+    cov        = np.cov(su_vals, price_vals)           # 2×2 covariance matrix
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)    # eigenvalues in ascending order
+
+    # Parametric ellipse: unit circle transformed by sqrt(eigenvalues) and eigenvectors
+    theta  = np.linspace(0, 2 * np.pi, 300)
+    circle = np.array([np.cos(theta), np.sin(theta)])  # (2, 300)
+
+    def make_ellipse(n_sigma):
+        """Return (x, y) arrays for an n-sigma ellipse."""
+        scaled    = eigenvectors @ np.diag(n_sigma * np.sqrt(eigenvalues)) @ circle
+        return scaled[0] + mean_su, scaled[1] + mean_price
+
+    x_2sig, y_2sig = make_ellipse(2)
+    x_1sig, y_1sig = make_ellipse(1)
+
+    fig = go.Figure()
+
+    # 2σ ellipse — outer, light fill
+    fig.add_scatter(
+        x=x_2sig, y=y_2sig,
+        mode="lines",
+        line=dict(color="rgba(96,157,66,0.45)", width=1.5, dash="dot"),
+        fill="toself",
+        fillcolor="rgba(96,157,66,0.06)",
+        name="2σ region",
+        hoverinfo="skip",
+    )
+
+    # 1σ ellipse — inner, slightly stronger fill
+    fig.add_scatter(
+        x=x_1sig, y=y_1sig,
+        mode="lines",
+        line=dict(color="rgba(96,157,66,0.80)", width=1.5),
+        fill="toself",
+        fillcolor="rgba(96,157,66,0.15)",
+        name="1σ region",
+        hoverinfo="skip",
+    )
+
+    # Historical data points labeled by year
+    fig.add_scatter(
+        x=su_vals, y=price_vals,
+        mode="markers+text",
+        text=years,
+        textposition="top center",
+        textfont=dict(size=8, color=AEI["gray"]),
+        marker=dict(color=AEI["navy"], size=7, opacity=0.8),
+        name="Historical",
+        hovertemplate=(
+            "<b>%{text}</b><br>"
+            "S/U: %{x:.4f}<br>"
+            "Price: $%{y:.2f}/bu"
+            "<extra></extra>"
+        ),
+    )
+
+    # Scenario star
+    # Determine whether scenario is inside/outside ellipses for the label
+    scenario_label = _ellipse_region_label(
+        scenario_su, scenario_price, mean_su, mean_price, eigenvalues, eigenvectors
+    )
+    fig.add_scatter(
+        x=[scenario_su], y=[scenario_price],
+        mode="markers+text",
+        text=[f"Your scenario ({scenario_label})"],
+        textposition="bottom center",
+        textfont=dict(size=9, color=AEI["orange"]),
+        marker=dict(
+            color=AEI["orange"],
+            size=16,
+            symbol="star",
+            line=dict(color=AEI["navy"], width=1.5),
+        ),
+        name="Your scenario",
+        hovertemplate=(
+            f"<b>Your Scenario</b><br>"
+            f"S/U: {scenario_su:.4f}<br>"
+            f"Price: ${scenario_price:.2f}/bu<br>"
+            f"<i>{scenario_label}</i>"
+            "<extra></extra>"
+        ),
+    )
+
+    fig.update_layout(
+        xaxis_title="Supply-to-Use Ratio",
+        yaxis_title="Real Price (2025 $/bu)",
+        height=440,
+        margin=dict(t=20, b=50, l=60, r=20),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        xaxis=dict(showgrid=False, linecolor=AEI["gray"]),
+        yaxis=dict(gridcolor="#EBEBEB", linecolor=AEI["gray"]),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.01,
+            xanchor="right", x=1,
+        ),
+        hovermode="closest",
+    )
+    return fig
+
+
+def _ellipse_region_label(
+    su: float,
+    price: float,
+    mean_su: float,
+    mean_price: float,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
+) -> str:
+    """
+    Return a plain-English label indicating whether the point falls inside
+    the 1σ, 2σ, or outside both ellipses.
+    """
+    # Project the point into the eigenvector basis and compute Mahalanobis distance
+    delta       = np.array([su - mean_su, price - mean_price])
+    transformed = eigenvectors.T @ delta                      # rotate into principal axes
+    # Normalize by the semi-axis lengths (sqrt of eigenvalues)
+    std_dist    = np.sqrt(np.sum((transformed / np.sqrt(eigenvalues)) ** 2))
+
+    if std_dist <= 1.0:
+        return "within 1σ — historically normal"
+    elif std_dist <= 2.0:
+        return "within 2σ — somewhat unusual"
+    else:
+        return "outside 2σ — historically rare"
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +501,13 @@ def farmer_table(results: pd.DataFrame) -> pd.DataFrame:
 # Tab renderer
 # ---------------------------------------------------------------------------
 
-def render_tab(crop_label: str, results: pd.DataFrame, elasticity: float) -> None:
+def render_tab(
+    crop_label: str,
+    results: pd.DataFrame,
+    elasticity: float,
+    scenario_su: float | None = None,
+    scenario_price: float | None = None,
+) -> None:
     check = verify_decomp(results)
     if not check["pass"]:
         st.warning(f"Decomposition check failed (max error = {check['max_resid_error']:.1e})")
@@ -386,13 +542,29 @@ def render_tab(crop_label: str, results: pd.DataFrame, elasticity: float) -> Non
     col_l, col_r = st.columns(2)
     with col_l:
         st.markdown(f"**Actual vs Model Price** — real 2025 $/bu")
-        st.plotly_chart(price_chart(results), use_container_width=True)
+        st.plotly_chart(price_chart(results), width="stretch")
     with col_r:
         st.markdown("**What Moved the Price?** — Shapley decomposition")
-        st.plotly_chart(shapley_chart(results), use_container_width=True)
+        st.plotly_chart(shapley_chart(results), width="stretch")
 
     st.markdown("**Supply-to-Use Ratio**")
-    st.plotly_chart(su_chart(results), use_container_width=True)
+    st.plotly_chart(su_chart(results), width="stretch")
+
+    # ---- Scenario confidence ellipse ----
+    if scenario_su is not None and scenario_price is not None:
+        st.markdown("---")
+        st.markdown("**Where Does Your Scenario Fall?** — Historical S/U vs Price")
+        st.caption(
+            "The shaded regions show 1σ (darker) and 2σ (lighter) of the historical "
+            "supply-to-use / price relationship, derived from the eigenvectors of the "
+            "covariance matrix. "
+            "The ★ marks your scenario from the sidebar. "
+            "Points outside the 2σ ellipse represent historically unusual market conditions."
+        )
+        st.plotly_chart(
+            scenario_ellipse_chart(results, scenario_su, scenario_price),
+            width="stretch",
+        )
 
     # ---- Summary table ----
     st.markdown("---")
@@ -417,7 +589,7 @@ def render_tab(crop_label: str, results: pd.DataFrame, elasticity: float) -> Non
             subset=["Supply Drove ($/bu)", "Demand Drove ($/bu)"],
             cmap="RdYlGn", vmin=-4, vmax=4,
         ),
-        use_container_width=True,
+        width="stretch",
         height=None,
     )
 
@@ -434,7 +606,19 @@ def render_tab(crop_label: str, results: pd.DataFrame, elasticity: float) -> Non
 tab_corn, tab_soy = st.tabs(["🌽 Corn", "🫘 Soybeans"])
 
 with tab_corn:
-    render_tab("corn", corn_res, CORN_ELASTICITY)
+    render_tab(
+        "corn",
+        corn_res,
+        CORN_ELASTICITY,
+        scenario_su    = scen_su    if scen_crop == "Corn" else None,
+        scenario_price = ratio_pred if scen_crop == "Corn" else None,
+    )
 
 with tab_soy:
-    render_tab("soybeans", soy_res, SOYBEAN_ELASTICITY)
+    render_tab(
+        "soybeans",
+        soy_res,
+        SOYBEAN_ELASTICITY,
+        scenario_su    = scen_su    if scen_crop == "Soybeans" else None,
+        scenario_price = ratio_pred if scen_crop == "Soybeans" else None,
+    )
