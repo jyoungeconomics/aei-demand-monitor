@@ -22,6 +22,11 @@ try:
 except ImportError:
     requests = None
 
+try:
+    import yfinance as yf
+except ImportError:
+    yf = None
+
 from data import load_crop_data, load_real_prices
 from model import (
     BASE_YEAR,
@@ -203,13 +208,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    f'<p class="aei-title">🌽 Corn & Soybean Demand Monitor</p>'
-    f'<p class="aei-sub">Ag Economic Insights &nbsp;|&nbsp; '
-    f'What USDA supply &amp; usage data say about corn and soybean prices &nbsp;|&nbsp; '
-    f'Prices adjusted to 2025 dollars</p>',
-    unsafe_allow_html=True,
-)
+# Header with logo and title
+logo_path = os.path.join(os.path.dirname(__file__), "aei_logo.png")
+col1, col2 = st.columns([1, 6])
+with col1:
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=80)
+with col2:
+    st.markdown(
+        f'<p class="aei-title">🌽 Corn & Soybean Demand Monitor</p>'
+        f'<p class="aei-sub">Ag Economic Insights &nbsp;|&nbsp; '
+        f'What USDA supply &amp; usage data say about corn and soybean prices &nbsp;|&nbsp; '
+        f'Prices adjusted to 2025 dollars</p>',
+        unsafe_allow_html=True,
+    )
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -328,37 +340,31 @@ def _safe_compute_g(supply: float, usage: float, elasticity: float) -> float | N
 
 def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
     """
-    Scrape current futures price from BarChart.
+    Fetch current futures price from Yahoo Finance via yfinance.
     contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
-    Returns the last price in $/bu, or None if scraping fails.
+    Returns the last price in $/bu, or None if fetch fails.
 
-    CBOT prices are quoted in cents/bu with eighths notation, e.g.:
-      "1154-2" = 1154 and 2/8 cents = 1154.25 cents = $11.5425/bu
+    yfinance returns CBOT prices in cents/bu, so we divide by 100 to get $/bu.
     """
-    if not requests:
+    if not yf:
         return None
     try:
-        url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        response = requests.get(url, timeout=5, headers=headers)
-        response.raise_for_status()
+        # Map to Yahoo Finance tickers
+        # ZCZ26 (Dec corn) -> ZC=F (corn futures generic)
+        # ZSX26 (Nov soybeans) -> ZS=F (soybeans futures generic)
+        if contract_symbol.startswith("ZC"):
+            ticker = "ZC=F"  # Corn futures
+        else:
+            ticker = "ZS=F"  # Soybeans futures
 
-        # Extract CBOT price format (e.g., "1154-2" = 1154 and 2/8 cents/bu)
-        # Look for the line with lastPrice and extract XXXX-Y format
-        import re
-        for line in response.text.split('\n'):
-            if 'lastPrice' in line:
-                # Match CBOT price: >1154-2</span> or similar
-                match = re.search(r'>(\d{3,4})-(\d)</span>', line)
-                if match:
-                    main = int(match.group(1))
-                    frac = int(match.group(2))
-                    # CBOT format: XXXX-Y where Y is in eighths (0-7)
-                    cents_per_bu = main + frac / 8.0
-                    dollars_per_bu = cents_per_bu / 100.0
-                    return dollars_per_bu
+        data = yf.Ticker(ticker)
+        hist = data.history(period="1d")
+
+        if not hist.empty:
+            # yfinance returns prices in cents/bu for CBOT contracts
+            price_cents = float(hist["Close"].iloc[-1])
+            price_dollars = price_cents / 100.0
+            return price_dollars
     except Exception:
         pass
     return None
@@ -427,7 +433,7 @@ with st.sidebar:
     if current_price is not None:
         # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        st.caption(f"ℹ️ Using current {scen_crop} futures ({contract_symbol}) from BarChart")
+        st.caption(f"ℹ️ Using current {scen_crop} futures ({contract_symbol}) from Yahoo Finance")
     elif spot_key not in st.session_state:
         default_spot = round(last_actual, 2)
     else:
