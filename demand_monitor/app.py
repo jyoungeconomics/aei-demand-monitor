@@ -325,6 +325,10 @@ def scenario_ellipse_chart(
     The orange star marks the subscriber's scenario from the sidebar.
     Points inside 1σ represent the most 'normal' market conditions;
     outside 2σ are historically unusual combinations.
+
+    To produce the ~45° tilted ellipse from the white paper, the axes are
+    visually scaled so that one standard deviation in S/U occupies the same
+    pixel length as one standard deviation in price.
     """
     hist = results.dropna(subset=["su_ratio", "price_real"])
     su_vals    = hist["su_ratio"].values
@@ -334,6 +338,8 @@ def scenario_ellipse_chart(
     # --- Covariance and eigenvector decomposition ---
     mean_su    = np.mean(su_vals)
     mean_price = np.mean(price_vals)
+    std_su     = np.std(su_vals, ddof=1)
+    std_price  = np.std(price_vals, ddof=1)
     cov        = np.cov(su_vals, price_vals)           # 2×2 covariance matrix
     eigenvalues, eigenvectors = np.linalg.eigh(cov)    # eigenvalues in ascending order
 
@@ -343,7 +349,7 @@ def scenario_ellipse_chart(
 
     def make_ellipse(n_sigma):
         """Return (x, y) arrays for an n-sigma ellipse."""
-        scaled    = eigenvectors @ np.diag(n_sigma * np.sqrt(eigenvalues)) @ circle
+        scaled = eigenvectors @ np.diag(n_sigma * np.sqrt(eigenvalues)) @ circle
         return scaled[0] + mean_su, scaled[1] + mean_price
 
     x_2sig, y_2sig = make_ellipse(2)
@@ -391,7 +397,6 @@ def scenario_ellipse_chart(
     )
 
     # Scenario star
-    # Determine whether scenario is inside/outside ellipses for the label
     scenario_label = _ellipse_region_label(
         scenario_su, scenario_price, mean_su, mean_price, eigenvalues, eigenvectors
     )
@@ -417,15 +422,26 @@ def scenario_ellipse_chart(
         ),
     )
 
+    # Lock the visual aspect ratio so 1 σ of S/U ≈ 1 σ of price on screen.
+    # This produces the ~45° tilted ellipse shown in the white paper.
+    # scaleanchor ties y-axis pixel scale to x-axis; scaleratio sets the
+    # conversion factor: one unit of price = scaleratio units of S/U visually.
+    scale_ratio = std_su / std_price  # data units of S/U per data unit of price
+
     fig.update_layout(
         xaxis_title="Supply-to-Use Ratio",
         yaxis_title="Real Price (2025 $/bu)",
-        height=440,
+        height=520,
         margin=dict(t=20, b=50, l=60, r=20),
         plot_bgcolor="white",
         paper_bgcolor="white",
         xaxis=dict(showgrid=False, linecolor=AEI["gray"]),
-        yaxis=dict(gridcolor="#EBEBEB", linecolor=AEI["gray"]),
+        yaxis=dict(
+            gridcolor="#EBEBEB",
+            linecolor=AEI["gray"],
+            scaleanchor="x",
+            scaleratio=scale_ratio,
+        ),
         legend=dict(
             orientation="h",
             yanchor="bottom", y=1.01,
@@ -448,10 +464,8 @@ def _ellipse_region_label(
     Return a plain-English label indicating whether the point falls inside
     the 1σ, 2σ, or outside both ellipses.
     """
-    # Project the point into the eigenvector basis and compute Mahalanobis distance
     delta       = np.array([su - mean_su, price - mean_price])
-    transformed = eigenvectors.T @ delta                      # rotate into principal axes
-    # Normalize by the semi-axis lengths (sqrt of eigenvalues)
+    transformed = eigenvectors.T @ delta
     std_dist    = np.sqrt(np.sum((transformed / np.sqrt(eigenvalues)) ** 2))
 
     if std_dist <= 1.0:
@@ -575,6 +589,14 @@ def render_tab(
         "Both sum to the total actual price change. Positive = price went up."
     )
     tbl = farmer_table(results)
+    def _color_impact(val):
+        """Red for negative, green for positive price impacts."""
+        if val > 0:
+            return f"color: {AEI['green']}; font-weight: 600"
+        elif val < 0:
+            return f"color: {AEI['red']}; font-weight: 600"
+        return ""
+
     st.dataframe(
         tbl.style
         .format({
@@ -585,12 +607,8 @@ def render_tab(
             "Demand Drove ($/bu)":       lambda v: f"{v:+.2f}",
             "Supply-to-Use Ratio":       "{:.4f}",
         })
-        .background_gradient(
-            subset=["Supply Drove ($/bu)", "Demand Drove ($/bu)"],
-            cmap="RdYlGn", vmin=-4, vmax=4,
-        ),
-        width="stretch",
-        height=None,
+        .map(_color_impact, subset=["Supply Drove ($/bu)", "Demand Drove ($/bu)"]),
+        use_container_width=True,
     )
 
     st.caption(
