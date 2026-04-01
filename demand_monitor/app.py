@@ -412,12 +412,13 @@ with st.sidebar:
 
     # Use fetched price if available, otherwise fall back to last actual or session state
     if current_price is not None:
-        default_spot = round(current_price, 2)
+        # Clamp to valid range (0.50–50.00) in case of bad data
+        default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
         st.caption(f"ℹ️ Using current {scen_crop} futures ({contract_symbol}) from BarChart")
     elif spot_key not in st.session_state:
         default_spot = round(last_actual, 2)
     else:
-        default_spot = float(st.session_state[spot_key])
+        default_spot = float(np.clip(st.session_state[spot_key], 0.50, 50.00))
 
     if spot_key not in st.session_state:
         st.session_state[spot_key] = default_spot
@@ -425,7 +426,7 @@ with st.sidebar:
     spot_price = st.number_input(
         "",
         min_value=0.50,
-        max_value=30.00,
+        max_value=50.00,
         value=float(st.session_state[spot_key]),
         step=0.05,
         format="%.2f",
