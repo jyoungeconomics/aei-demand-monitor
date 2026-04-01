@@ -323,6 +323,38 @@ def _safe_compute_g(supply: float, usage: float, elasticity: float) -> float | N
 
 
 # ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
+    """
+    Scrape current futures price from BarChart.
+    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
+    Returns the last price as a float, or None if scraping fails.
+    """
+    if not requests:
+        return None
+    try:
+        url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        response = requests.get(url, timeout=5, headers=headers)
+        response.raise_for_status()
+
+        # Try to extract the price from the HTML
+        # Look for lastPrice in JSON-like format
+        import re
+        pattern = r'"lastPrice":"?([\d.]+)"?'
+        matches = re.findall(pattern, response.text)
+        if matches:
+            return float(matches[0])
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Sidebar — Scenario / "What-If" Tool
 # ---------------------------------------------------------------------------
 
@@ -1000,34 +1032,6 @@ def farmer_table(
 # ---------------------------------------------------------------------------
 # Guardrail reference table display
 # ---------------------------------------------------------------------------
-
-def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
-    """
-    Scrape current futures price from BarChart.
-    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
-    Returns the last price as a float, or None if scraping fails.
-    """
-    if not requests:
-        return None
-    try:
-        url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        response = requests.get(url, timeout=5, headers=headers)
-        response.raise_for_status()
-
-        # Try to extract the price from the HTML
-        # Look for lastPrice in JSON-like format
-        import re
-        pattern = r'"lastPrice":"?([\d.]+)"?'
-        matches = re.findall(pattern, response.text)
-        if matches:
-            return float(matches[0])
-    except Exception:
-        pass
-    return None
-
 
 def render_guardrail_table(crop_name: str) -> None:
     """Show the historical S/U ratio reference table in an expander."""
