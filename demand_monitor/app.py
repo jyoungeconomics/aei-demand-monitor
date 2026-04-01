@@ -180,6 +180,10 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
+      /* Hide sidebar collapse button to prevent losing sidebar */
+      button[data-testid="collapseSidebarButton"] {{
+          display: none;
+      }}
       .aei-title {{
           color: {AEI["navy"]};
           font-size: 1.7rem;
@@ -212,12 +216,14 @@ st.markdown(
 # Header with logo and title
 col1, col2 = st.columns([1, 6])
 with col1:
-    # Try to find and display logo from multiple possible paths
+    # Try to find and display watermark from multiple possible paths
     logo_found = False
     for logo_candidate in [
+        os.path.join(os.path.dirname(__file__), "aei_watermark.png"),
+        os.path.join(os.getcwd(), "demand_monitor", "aei_watermark.png"),
+        os.path.join(os.getcwd(), "aei_watermark.png"),
         os.path.join(os.path.dirname(__file__), "aei_logo.png"),
         os.path.join(os.getcwd(), "demand_monitor", "aei_logo.png"),
-        os.path.join(os.getcwd(), "aei_logo.png"),
     ]:
         if os.path.exists(logo_candidate):
             try:
@@ -396,12 +402,6 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
 if "scen_crop" not in st.session_state:
     st.session_state.scen_crop = "Corn"
 scen_crop = st.session_state.scen_crop
-
-# Sidebar toggle hint (in case hamburger menu is hidden)
-with st.sidebar:
-    col_menu, col_spacer = st.columns([1, 4])
-    with col_menu:
-        st.markdown("**☰ Sidebar**", help="Click the hamburger menu (☰) at the top-left to toggle this sidebar")
 
 with st.sidebar:
     st.markdown("### 🔧 What-If Scenario")
