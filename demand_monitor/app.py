@@ -330,7 +330,10 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
     """
     Scrape current futures price from BarChart.
     contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
-    Returns the last price as a float, or None if scraping fails.
+    Returns the last price in $/bu, or None if scraping fails.
+
+    CBOT prices are quoted in cents/bu with eighths notation, e.g.:
+      "1154-2" = 1154 and 2/8 cents = 1154.25 cents = $11.5425/bu
     """
     if not requests:
         return None
@@ -342,13 +345,18 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         response = requests.get(url, timeout=5, headers=headers)
         response.raise_for_status()
 
-        # Try to extract the price from the HTML
-        # Look for lastPrice in JSON-like format
+        # Extract CBOT price format (e.g., "1154-2" = 1154 and 2/8 cents/bu)
+        # Look for: <span class="last-change" ... lastPrice'>XXXX-Y</span>
         import re
-        pattern = r'"lastPrice":"?([\d.]+)"?'
-        matches = re.findall(pattern, response.text)
-        if matches:
-            return float(matches[0])
+        pattern = r'data-ng-class="highlightValue\(\'lastPrice\'\)">(\d+)-(\d)</span>'
+        match = re.search(pattern, response.text)
+        if match:
+            main = int(match.group(1))
+            frac = int(match.group(2))
+            # CBOT format: XXXX-Y where Y is in eighths (0-7)
+            cents_per_bu = main + frac / 8.0
+            dollars_per_bu = cents_per_bu / 100.0
+            return dollars_per_bu
     except Exception:
         pass
     return None
