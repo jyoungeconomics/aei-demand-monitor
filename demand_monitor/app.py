@@ -180,7 +180,6 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Ensure sidebar is accessible - restore collapse button and normal behavior */
       .aei-title {{
           color: {AEI["navy"]};
           font-size: 1.7rem;
