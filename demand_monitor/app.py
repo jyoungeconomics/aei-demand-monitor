@@ -180,6 +180,17 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
+      /* Make hamburger/collapse button visible and easy to find */
+      button[data-testid="collapseSidebarButton"] {{
+          color: {AEI["gray"]} !important;
+          background-color: transparent !important;
+          font-size: 1.5rem !important;
+          padding: 0.25rem 0.5rem !important;
+      }}
+      button[data-testid="collapseSidebarButton"]:hover {{
+          background-color: rgba(96,157,66,0.1) !important;
+          color: {AEI["green"]} !important;
+      }}
       .aei-title {{
           color: {AEI["navy"]};
           font-size: 1.7rem;
@@ -231,7 +242,7 @@ with col1:
     ]:
         if os.path.exists(logo_candidate):
             try:
-                st.image(logo_candidate, width=150)
+                st.image(logo_candidate, width=180)
                 logo_found = True
                 break
             except Exception:
@@ -248,6 +259,33 @@ with col2:
         unsafe_allow_html=True,
     )
 st.divider()
+
+# Force sidebar open and keep hamburger button prominent
+components.html(
+    """
+    <script>
+    (function() {
+        // Clear any cached collapsed state so sidebar starts open
+        Object.keys(localStorage).forEach(function(key) {
+            if (key.includes('sidebar') || key.includes('Sidebar')) {
+                localStorage.removeItem(key);
+            }
+        });
+        // Slide sidebar into view if it is off-screen
+        function ensureSidebarOpen() {
+            var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
+            if (sb && parseInt(window.parent.getComputedStyle(sb).left) < 0) {
+                var btn = window.parent.document.querySelector('button[data-testid="collapseSidebarButton"]');
+                if (btn) btn.click();
+            }
+        }
+        setTimeout(ensureSidebarOpen, 300);
+        setTimeout(ensureSidebarOpen, 800);
+    })();
+    </script>
+    """,
+    height=0,
+)
 
 # ---------------------------------------------------------------------------
 # Data loading (cached)
@@ -382,18 +420,15 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         else:
             ticker = "ZS=F"  # Soybeans futures
 
-        # Fetch data with appropriate timeout for cloud deployment
         data = yf.Ticker(ticker)
-        hist = data.history(period="1d", timeout=15)
+        hist = data.history(period="1d")
 
-        if hist is not None and not hist.empty and "Close" in hist.columns:
+        if not hist.empty:
             # yfinance returns prices in cents/bu for CBOT contracts
             price_cents = float(hist["Close"].iloc[-1])
-            if price_cents > 0:
-                price_dollars = price_cents / 100.0
-                return price_dollars
-    except Exception as e:
-        # Fail gracefully — will use fallback price
+            price_dollars = price_cents / 100.0
+            return price_dollars
+    except Exception:
         pass
     return None
 
@@ -486,18 +521,21 @@ with st.sidebar:
     )
     st.session_state[spot_key] = spot_price
 
-    # Model-implied price (ratio method)
+    # Model-implied price (both ratio and OLS methods)
     G_scen    = _safe_compute_g(scen_supply, scen_usage, e)
     base_row  = df_full[df_full["year"] == BASE_YEAR].iloc[0]
     G_base_val = _safe_compute_g(float(base_row["supply"]), float(base_row["usage"]), e)
     P_base_val = float(df_full[df_full["year"] == BASE_YEAR]["price_real"].values[0])
 
+    # Ratio method
     if G_scen is not None and G_base_val is not None and G_base_val > 0:
         _rp = P_base_val * (G_scen / G_base_val)
-        # Sanity-clamp: prices outside $0.25–$100/bu are not meaningful
         ratio_pred = _rp if (math.isfinite(_rp) and 0.25 <= _rp <= 100.0) else None
     else:
         ratio_pred = None
+
+    # OLS method: price = b0 + b1 * (S/U ratio)
+    ols_pred = b0 + b1 * su_scen
 
     # S/U ratio and guardrail status
     su_scen = scen_supply / max(scen_usage, 1.0)
@@ -508,28 +546,33 @@ with st.sidebar:
     # Model price display
     if ratio_pred is not None:
         st.markdown("**Model-implied price**")
+        # Show OLS prediction (always available)
         st.markdown(
             f'<div class="scenario-box">'
             f'<span style="font-size:1.4rem; font-weight:700; color:{AEI["navy"]}">'
-            f"${ratio_pred:.2f}<small>/bu</small></span><br>"
+            f"${ols_pred:.2f}<small>/bu</small></span><br>"
             f'<span style="color:{AEI["gray"]}; font-size:0.78rem;">'
-            f"G index: {G_scen:.4f} &nbsp;|&nbsp; S/U ratio: {su_scen:.3f}"
+            f"OLS model &nbsp;|&nbsp; S/U ratio: {su_scen:.3f}"
             f"</span></div>",
             unsafe_allow_html=True,
         )
-        # Spot vs model comparison
-        delta_model   = ratio_pred - spot_price
-        delta_actual  = ratio_pred - last_actual
-        sign_m  = "+" if delta_model  >= 0 else ""
+        # Show ratio prediction for reference
+        if ratio_pred is not None:
+            st.caption(f"Ratio method: ${ratio_pred:.2f}/bu")
+
+        # Comparisons
+        delta_ols     = ols_pred - spot_price
+        delta_actual  = ols_pred - last_actual
+        sign_m  = "+" if delta_ols  >= 0 else ""
         sign_a  = "+" if delta_actual >= 0 else ""
-        col_m   = AEI["green"] if delta_model  >= 0 else AEI["red"]
+        col_m   = AEI["green"] if delta_ols  >= 0 else AEI["red"]
         col_a   = AEI["green"] if delta_actual >= 0 else AEI["red"]
         st.markdown(
             f'<span style="color:{col_m}; font-weight:600; font-size:0.85rem;">'
-            f"{sign_m}${delta_model:.2f} &nbsp; vs your spot price (${spot_price:.2f})"
+            f"vs your price: {sign_m}${abs(delta_ols):.2f}"
             f"</span><br>"
             f'<span style="color:{col_a}; font-weight:600; font-size:0.85rem;">'
-            f"{sign_a}${delta_actual:.2f} &nbsp; vs last actual ({int(ref['year'])})"
+            f"vs {int(ref['year'])} actual: {sign_a}${abs(delta_actual):.2f}"
             f"</span>",
             unsafe_allow_html=True,
         )
@@ -903,7 +946,7 @@ def scenario_ellipse_chart(
     _fill_band(1.26, None, _STATUS_FILL["danger"],   "Danger zone",    False)
 
     # ----------------------------------------------------------------
-    # Iso-price contour lines
+    # Iso-price contour lines  (labeled on the line, not in legend)
     # ----------------------------------------------------------------
     prices_hist = hist["price_real"].values
     p_lo = np.floor(prices_hist.min() * 2) / 2
@@ -921,20 +964,30 @@ def scenario_ellipse_chart(
         if r_target < 1e-6:
             continue
         u_line = s_line / r_target
-        # Clip to axis range — prevents runaway lines from crashing the chart
         u_line = np.clip(u_line, y_min * 0.9, y_max * 1.1)
         if u_line.min() > y_max * 1.05 or u_line.max() < y_min * 0.95:
             continue
+        # Line trace — no markers, not in legend
         fig.add_scatter(
             x=s_line, y=u_line,
             mode="lines",
             line=dict(color=AEI["gray"], width=1, dash="dot"),
-            marker=dict(size=0),
-            name=f"${P_target:.1f}/bu",
-            legendgroup="iso",
-            showlegend=True,
+            showlegend=False,
             hovertemplate=f"Iso-price: ${P_target:.1f}/bu<extra></extra>",
         )
+        # Label at the left end of the line, inside the plot
+        label_x = x_min + (x_max - x_min) * 0.02
+        label_u = label_x / r_target
+        if y_min * 0.95 <= label_u <= y_max * 1.05:
+            fig.add_annotation(
+                x=label_x, y=label_u,
+                text=f"${P_target:.1f}",
+                showarrow=False,
+                font=dict(size=9, color=AEI["gray"]),
+                xanchor="left",
+                yanchor="bottom",
+                bgcolor="rgba(255,255,255,0.7)",
+            )
 
     # ----------------------------------------------------------------
     # Confidence ellipses
@@ -966,7 +1019,7 @@ def scenario_ellipse_chart(
         mode="markers+text",
         text=years,
         textposition="top center",
-        textfont=dict(size=8, color=AEI["gray"]),
+        textfont=dict(size=10, color=AEI["navy"], family="Arial Black"),
         marker=dict(color=AEI["navy"], size=7, opacity=0.8),
         name="Historical",
         hovertemplate=(
@@ -1223,23 +1276,36 @@ def render_tab(
     # ---- Historical S/U reference table ----
     render_guardrail_table(crop_label)
 
-    # ---- Scenario supply/usage chart ----
+    # ---- Scenario supply/usage chart (with click-to-set coords) ----
     if scenario_supply is not None and scenario_usage is not None and scenario_price is not None:
         st.markdown("---")
         st.markdown("**Where Does Your Scenario Fall?** — Supply & Usage in Context")
         st.caption(
             "The shaded background shows market balance zones based on 25 years of history: "
             "green = normal range, yellow = unusual, red = no historical precedent. "
-            "Dotted gray lines connect every (Supply, Usage) pair that implies the same model price. "
+            "Dotted lines are iso-price contours (same model price along each line). "
             "The ovals show 1σ and 2σ of the historical supply/usage relationship. "
-            "The ★ marks your scenario."
+            "The ★ marks your scenario. **Click any point on the chart to move the ★ there.**"
         )
-        st.plotly_chart(
+        scatter_event = st.plotly_chart(
             scenario_ellipse_chart(
                 results, scenario_supply, scenario_usage, scenario_price, elasticity
             ),
             width="stretch",
+            on_select="rerun",
+            key=f"scatter_{crop_label}",
         )
+        # If user clicked a historical point, update supply/usage sliders
+        if scatter_event and scatter_event.selection and scatter_event.selection.points:
+            pt = scatter_event.selection.points[0]
+            clicked_s = pt.get("x")
+            clicked_u = pt.get("y")
+            if clicked_s is not None and clicked_u is not None:
+                supply_key = f"supply_{crop_label.capitalize()}"
+                usage_key  = f"usage_{crop_label.capitalize()}"
+                st.session_state[supply_key] = float(clicked_s)
+                st.session_state[usage_key]  = float(clicked_u)
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1253,31 +1319,33 @@ with col1:
         st.session_state.scen_crop = st.session_state._crop_radio
     st.radio(
         "Select Crop",
-        ["Corn", "Soybeans"],
+        ["🌽 Corn", "🫘 Soybeans"],
         key="_crop_radio",
         on_change=_on_crop_change,
         horizontal=True,
         label_visibility="collapsed",
     )
+    # Extract crop name without emoji for session state
+    if st.session_state._crop_radio:
+        st.session_state.scen_crop = st.session_state._crop_radio.split()[-1]
 
-tab_corn, tab_soy = st.tabs(["🌽 Corn", "🫘 Soybeans"])
-
-with tab_corn:
+if scen_crop == "Corn":
+    st.markdown(f"### 🌽 Corn")
     render_tab(
-        "corn", corn_res, CORN_ELASTICITY,
-        scenario_supply = scen_supply  if scen_crop == "Corn"     else None,
-        scenario_usage  = scen_usage   if scen_crop == "Corn"     else None,
-        scenario_price  = ratio_pred   if scen_crop == "Corn"     else None,
-        spot_price_     = spot_price   if scen_crop == "Corn"     else None,
+        "Corn", corn_res, CORN_ELASTICITY,
+        scenario_supply = scen_supply,
+        scenario_usage  = scen_usage,
+        scenario_price  = ratio_pred,
+        spot_price_     = spot_price,
         scenario_row    = _corn_scen_row,
     )
-
-with tab_soy:
+else:
+    st.markdown(f"### 🫘 Soybeans")
     render_tab(
-        "soybeans", soy_res, SOYBEAN_ELASTICITY,
-        scenario_supply = scen_supply  if scen_crop == "Soybeans" else None,
-        scenario_usage  = scen_usage   if scen_crop == "Soybeans" else None,
-        scenario_price  = ratio_pred   if scen_crop == "Soybeans" else None,
-        spot_price_     = spot_price   if scen_crop == "Soybeans" else None,
+        "Soybeans", soy_res, SOYBEAN_ELASTICITY,
+        scenario_supply = scen_supply,
+        scenario_usage  = scen_usage,
+        scenario_price  = ratio_pred,
+        spot_price_     = spot_price,
         scenario_row    = _soy_scen_row,
     )
