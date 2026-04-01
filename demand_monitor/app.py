@@ -534,11 +534,12 @@ with st.sidebar:
     else:
         ratio_pred = None
 
+    # S/U ratio (needed for both OLS and guardrail)
+    su_scen = scen_supply / max(scen_usage, 1.0)
+
     # OLS method: price = b0 + b1 * (S/U ratio)
     ols_pred = b0 + b1 * su_scen
 
-    # S/U ratio and guardrail status
-    su_scen = scen_supply / max(scen_usage, 1.0)
     grd_status, grd_color, grd_label, grd_msg = get_guardrail_status(su_scen)
 
     st.markdown("---")
