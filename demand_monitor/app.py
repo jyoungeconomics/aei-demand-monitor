@@ -309,14 +309,20 @@ st.markdown(
                 resizeHandler.style.width = savedWidth + 'px';
             }
 
-            // Handle mousedown on the drag handle (the ::after pseudo-element area)
-            resizeHandler.addEventListener('mousedown', function(e) {
-                // Only trigger resize if clicking on the right edge (drag handle area)
-                // Extended to 50px to make the dots fully draggable
-                if (e.clientX < resizeHandler.offsetLeft + resizeHandler.offsetWidth - 50) {
-                    return;
-                }
+            // Create a larger invisible drag handle overlay covering the dots
+            const dragOverlay = document.createElement('div');
+            dragOverlay.style.position = 'absolute';
+            dragOverlay.style.right = '0';
+            dragOverlay.style.top = '0';
+            dragOverlay.style.width = '80px';
+            dragOverlay.style.height = '100%';
+            dragOverlay.style.cursor = 'col-resize';
+            dragOverlay.style.zIndex = '200';
+            dragOverlay.style.background = 'transparent';
+            resizeHandler.appendChild(dragOverlay);
 
+            // Handle mousedown on the drag overlay
+            dragOverlay.addEventListener('mousedown', function(e) {
                 isResizing = true;
                 startX = e.clientX;
                 startWidth = resizeHandler.offsetWidth;
@@ -324,6 +330,7 @@ st.markdown(
                 // Prevent text selection while dragging
                 document.body.style.userSelect = 'none';
                 document.body.style.cursor = 'col-resize';
+                e.preventDefault();
             });
 
             document.addEventListener('mousemove', function(e) {
