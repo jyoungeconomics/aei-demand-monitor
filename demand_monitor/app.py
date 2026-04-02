@@ -201,18 +201,20 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Sidebar: wider for better UX, with visual drag handle */
+      /* Sidebar: resizable with drag handle */
       [data-testid="stSidebar"] {{
           background-color: white;
-          width: 480px !important;
-          min-width: 480px !important;
+          width: 480px;
+          min-width: 280px;
+          max-width: 700px;
           position: relative;
+          box-sizing: border-box;
       }}
       /* Drag handle visual on sidebar edge */
       [data-testid="stSidebar"]::after {{
           content: '⋮ ⋮ ⋮';
           position: absolute;
-          right: 4px;
+          right: 2px;
           top: 50%;
           transform: translateY(-50%);
           color: {AEI["green"]};
@@ -222,6 +224,9 @@ st.markdown(
           user-select: none;
           z-index: 100;
           letter-spacing: 2px;
+          padding: 4px;
+          width: 16px;
+          text-align: center;
       }}
       /* Hide ALL buttons in the sidebar (all collapse/hamburger buttons) */
       [data-testid="stSidebar"] button {{
@@ -270,6 +275,93 @@ st.markdown(
           font-size: 0.83rem;
       }}
     </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# JavaScript to handle sidebar drag-to-resize
+st.markdown(
+    """
+    <script>
+    (function() {
+        let isResizing = false;
+        let startX = 0;
+        let startWidth = 0;
+
+        // Find sidebar and set up resize handler
+        function setupResize() {
+            const sidebar = document.querySelector('[data-testid="stSidebar"]');
+            if (!sidebar) {
+                // Retry in 100ms if sidebar not found yet
+                setTimeout(setupResize, 100);
+                return;
+            }
+
+            const resizeHandler = sidebar;
+
+            // Load saved width from localStorage
+            const savedWidth = localStorage.getItem('streamlit_sidebar_width');
+            if (savedWidth) {
+                resizeHandler.style.width = savedWidth + 'px';
+            }
+
+            // Handle mousedown on the drag handle (the ::after pseudo-element area)
+            resizeHandler.addEventListener('mousedown', function(e) {
+                // Only trigger resize if clicking on the right edge (drag handle area)
+                if (e.clientX < resizeHandler.offsetLeft + resizeHandler.offsetWidth - 30) {
+                    return;
+                }
+
+                isResizing = true;
+                startX = e.clientX;
+                startWidth = resizeHandler.offsetWidth;
+
+                // Prevent text selection while dragging
+                document.body.style.userSelect = 'none';
+                document.body.style.cursor = 'col-resize';
+            });
+
+            document.addEventListener('mousemove', function(e) {
+                if (!isResizing) return;
+
+                const diffX = e.clientX - startX;
+                const newWidth = Math.max(280, Math.min(700, startWidth + diffX));
+
+                resizeHandler.style.width = newWidth + 'px';
+            });
+
+            document.addEventListener('mouseup', function() {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.userSelect = 'auto';
+                    document.body.style.cursor = 'auto';
+
+                    // Save width to localStorage
+                    const sidebar = document.querySelector('[data-testid="stSidebar"]');
+                    if (sidebar) {
+                        localStorage.setItem('streamlit_sidebar_width', sidebar.offsetWidth);
+                    }
+                }
+            });
+        }
+
+        // Try to setup resize immediately, and again on page load
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setupResize);
+        } else {
+            setupResize();
+        }
+
+        // Also retry periodically in case sidebar is added dynamically
+        setInterval(function() {
+            const sidebar = document.querySelector('[data-testid="stSidebar"]');
+            if (sidebar && !sidebar.hasAttribute('data-resize-ready')) {
+                sidebar.setAttribute('data-resize-ready', 'true');
+                setupResize();
+            }
+        }, 500);
+    })();
+    </script>
     """,
     unsafe_allow_html=True,
 )
@@ -646,9 +738,11 @@ with st.sidebar:
     if current_price is not None:
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
         live_status = f"✅ Live {scen_crop} futures ({contract_symbol}): ${default_spot:.2f}"
+        has_live = True
     else:
         default_spot = round(last_actual, 2)
         live_status = f"📊 Using {int(ref['year'])} actual price (live unavailable): ${default_spot:.2f}"
+        has_live = False
 
     if spot_key not in st.session_state:
         st.session_state[spot_key] = default_spot
@@ -656,32 +750,45 @@ with st.sidebar:
     # Show live price status prominently
     st.caption(live_status)
 
+    # CSS to make spot price input box very visible
+    st.markdown(
+        f"""
+        <style>
+            [data-testid="stNumberInput"] input {{
+                background: {AEI["green"]}22 !important;
+                border: 2px solid {AEI["green"]} !important;
+                padding: 12px !important;
+                font-size: 1.1rem !important;
+                font-weight: 600 !important;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # Create layout: price input + live button side by side
     col_input, col_btn = st.columns([3, 1])
 
     with col_input:
         spot_price = st.number_input(
-            "Enter your price:",
+            "👉 ENTER YOUR PRICE:",
             min_value=0.50,
             max_value=50.00,
             value=float(st.session_state[spot_key]),
             step=0.05,
             format="%.2f",
             key=f"_spot_num_{scen_crop}",
-            help="Type your own price estimate, cash price, or use the live price",
+            help="Click here and type your own price, or use the button →",
         )
         st.session_state[spot_key] = spot_price
 
     with col_btn:
-        if current_price is not None:
-            def _reset_to_live():
-                st.session_state[spot_key] = default_spot
-                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
-            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live, use_container_width=True,
-                     help=f"Reset to current BarChart price (${default_spot:.2f})")
-        else:
-            st.button("–", key=f"_live_btn_{scen_crop}", disabled=True, use_container_width=True,
-                     help="Live price unavailable")
+        st.markdown("<div style='margin-top: 0.35rem;'></div>", unsafe_allow_html=True)  # Alignment
+        def _reset_to_live():
+            st.session_state[spot_key] = default_spot
+            st.session_state[f"_spot_num_{scen_crop}"] = default_spot
+        st.button("📡 Live\nPrice", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live,
+                 use_container_width=True, help=f"Reset to market price: ${default_spot:.2f}")
 
     # Model-implied price: price = b0 + b1 * K * P_spot * G
     # where G = (S/U)^(1/ε), K is a normalization constant, and P_spot is the user's spot price
@@ -1027,6 +1134,7 @@ def scenario_ellipse_chart(
     supply_vals = hist["supply"].values
     usage_vals  = hist["usage"].values
     years       = hist["year"].astype(int).astype(str).values
+    price_vals  = hist["price_real"].values
 
     mean_s = np.mean(supply_vals)
     mean_u = np.mean(usage_vals)
@@ -1179,6 +1287,7 @@ def scenario_ellipse_chart(
     # ----------------------------------------------------------------
     fig.add_scatter(
         x=supply_vals, y=usage_vals,
+        customdata=price_vals,
         mode="markers+text",
         text=years,
         textposition="top center",
@@ -1188,7 +1297,8 @@ def scenario_ellipse_chart(
         hovertemplate=(
             "<b>%{text}</b><br>"
             "Supply: %{x:,.0f} mil. bu<br>"
-            "Usage: %{y:,.0f} mil. bu"
+            "Usage: %{y:,.0f} mil. bu<br>"
+            "Actual Price: $%{customdata:.2f}/bu"
             "<extra></extra>"
         ),
     )
