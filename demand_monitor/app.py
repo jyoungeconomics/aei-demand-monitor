@@ -180,9 +180,15 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Sidebar content colours */
+      /* Sidebar: permanently open, hide native collapse button, widen for better UX */
       [data-testid="stSidebar"] {{
           background-color: white;
+          width: 380px !important;
+          min-width: 380px !important;
+      }}
+      /* Hide the native << collapse button inside the sidebar */
+      [data-testid="stSidebar"] button[data-testid="stBaseButton-headerNoPadding"] {{
+          display: none !important;
       }}
       .aei-title {{
           color: {AEI["navy"]};
@@ -467,15 +473,18 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         else:
             ticker = "ZS=F"  # Soybeans futures
 
+        # Use shorter period and explicit download params for faster, more reliable fetch
         data = yf.Ticker(ticker)
-        hist = data.history(period="1d")
+        hist = data.history(period="1d", progress=False)
 
-        if not hist.empty:
+        if hist is not None and not hist.empty and "Close" in hist.columns:
             # yfinance returns prices in cents/bu for CBOT contracts
             price_cents = float(hist["Close"].iloc[-1])
-            price_dollars = price_cents / 100.0
-            return price_dollars
-    except Exception:
+            if price_cents > 0 and price_cents < 10000:  # sanity check (realistic range)
+                price_dollars = price_cents / 100.0
+                return price_dollars
+    except Exception as e:
+        # Silent failure — will use fallback price
         pass
     return None
 
