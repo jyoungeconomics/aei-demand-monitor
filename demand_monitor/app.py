@@ -126,8 +126,7 @@ def _compute_soybean_guardrail_table():
 
     def price_range_for_su(su_lo, su_hi):
         """Find price range when S/U is between su_lo and su_hi.
-        Use progressive fallback: exact, then wider bands, then estimate from closest data."""
-        # Try exact match first
+        Falls back to broader bands if exact range has no data."""
         if su_lo is None:
             mask = su_vals <= su_hi
         elif su_hi is None:
@@ -139,33 +138,20 @@ def _compute_soybean_guardrail_table():
             prices = price_vals[mask]
             return f"${prices.min():.1f}–${prices.max():.1f}/bu"
 
-        # Fallback 1: Use wider tolerance (±0.05)
+        # Fallback 1: Use broader ±0.05 tolerance
         if su_lo is None:
-            mask_wide = su_vals <= (su_hi + 0.05)
+            mask_broad = su_vals <= (su_hi + 0.05)
         elif su_hi is None:
-            mask_wide = su_vals >= (su_lo - 0.05)
+            mask_broad = su_vals >= (su_lo - 0.05)
         else:
-            mask_wide = (su_vals >= su_lo - 0.05) & (su_vals <= su_hi + 0.05)
+            mask_broad = (su_vals >= su_lo - 0.05) & (su_vals <= su_hi + 0.05)
 
-        if mask_wide.any():
-            prices = price_vals[mask_wide]
+        if mask_broad.any():
+            prices = price_vals[mask_broad]
             return f"${prices.min():.1f}–${prices.max():.1f}/bu"
 
-        # Fallback 2: Use nearest quartile of data
-        # For extreme high S/U (loose), use lowest 25% prices; for extreme low S/U (tight), use highest 25%
-        if su_hi is None and su_lo is not None:  # su_lo with no upper bound (tight scenario)
-            # Tight = high prices, use top 25%
-            cutoff = np.percentile(price_vals, 75)
-            prices = price_vals[price_vals >= cutoff]
-            return f"${prices.min():.1f}–${prices.max():.1f}/bu (est.)"
-        elif su_lo is None:  # su_hi with no lower bound (loose scenario)
-            # Loose = low prices, use bottom 25%
-            cutoff = np.percentile(price_vals, 25)
-            prices = price_vals[price_vals <= cutoff]
-            return f"${prices.min():.1f}–${prices.max():.1f}/bu (est.)"
-
-        # Final fallback: use full range
-        return f"${price_vals.min():.1f}–${price_vals.max():.1f}/bu"
+        # Fallback 2: Use full historical range as estimate
+        return f"${price_vals.min():.1f}–${price_vals.max():.1f}/bu (historical range)"
 
     return pd.DataFrame([
         {"S/U Ratio": "> 1.26",    "Market Condition": "Extremely loose",  "Status": "Danger",
@@ -303,99 +289,46 @@ with col2:
     )
 st.divider()
 
-# Sidebar: Keep permanently open + add drag-to-resize functionality
+# Sidebar: Keep permanently open with drag-resize handle
+# Add CSS for visual resize handle on sidebar edge
 st.markdown(
     f"""
     <style>
-      /* Visual drag handle on sidebar right edge */
+      /* Visual drag handle on the right edge of sidebar */
       [data-testid="stSidebar"]::after {{
         content: '⋮';
         position: absolute;
-        right: 6px;
+        right: 4px;
         top: 50%;
         transform: translateY(-50%);
-        font-size: 1.4rem;
+        font-size: 1.2rem;
         color: {AEI["green"]};
         cursor: col-resize;
         font-weight: bold;
-        user-select: none;
-        z-index: 999;
-      }}
-      [data-testid="stSidebar"] {{
-        position: relative;
+        z-index: 100;
+        letter-spacing: -0.5px;
       }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Keep sidebar open and add drag-to-resize handler
+# Force sidebar to stay open (prevent Streamlit's native collapse)
 components.html(
     """
     <script>
     (function() {
         var p = window.parent;
-        var isResizing = false;
-        var currentX = 0;
-
-        function getSidebar() {
-            return p.document.querySelector('[data-testid="stSidebar"]');
-        }
-
-        function forceOpen() {
-            var sb = getSidebar();
-            if (sb) {
-                sb.style.transform = 'translateX(0)';
-                sb.style.position = 'relative';
+        function ensureOpen() {
+            var s = p.document.querySelector('[data-testid="stSidebar"]');
+            if (s) {
+                s.style.transform = 'translateX(0)';
+                s.style.position = 'relative';
             }
         }
-
-        // Keep sidebar permanently open
-        forceOpen();
-        setInterval(forceOpen, 500);
-
-        // Add drag-to-resize handler
-        p.document.addEventListener('mousedown', function(e) {
-            var sb = getSidebar();
-            if (!sb) return;
-
-            var rect = sb.getBoundingClientRect();
-            var isNearEdge = e.clientX >= rect.right - 15 && e.clientX <= rect.right + 2;
-
-            if (isNearEdge) {
-                isResizing = true;
-                currentX = e.clientX;
-                sb.style.userSelect = 'none';
-                p.document.body.style.cursor = 'col-resize';
-            }
-        });
-
-        p.document.addEventListener('mousemove', function(e) {
-            if (!isResizing) return;
-
-            var sb = getSidebar();
-            if (!sb) return;
-
-            var delta = e.clientX - currentX;
-            var currentWidth = parseInt(p.getComputedStyle(sb).width);
-            var newWidth = Math.max(250, Math.min(currentWidth + delta, 600));
-
-            sb.style.width = newWidth + 'px !important';
-            sb.style.minWidth = newWidth + 'px !important';
-            currentX = e.clientX;
-            p.document.body.style.cursor = 'col-resize';
-        });
-
-        p.document.addEventListener('mouseup', function() {
-            if (isResizing) {
-                isResizing = false;
-                var sb = getSidebar();
-                if (sb) {
-                    sb.style.userSelect = 'auto';
-                }
-                p.document.body.style.cursor = 'auto';
-            }
-        });
+        ensureOpen();
+        setTimeout(ensureOpen, 500);
+        setTimeout(ensureOpen, 1500);
     })();
     </script>
     """,
@@ -638,54 +571,50 @@ with st.sidebar:
     last_actual = float(ref["price_real"])
     spot_key    = f"spot_price_{scen_crop}"
 
-    # Try to fetch current futures price
+    # Try to fetch current futures price from BarChart
     contract_symbol = "ZCZ26" if scen_crop == "Corn" else "ZSX26"
     current_price = _get_futures_price_from_barchart(contract_symbol)
 
-    # Set defaults
+    # Set default and initialize session state
     if current_price is not None:
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        live_label = f"✅ Live {scen_crop} futures ({contract_symbol}): ${default_spot:.2f}"
-        has_live = True
+        live_status = f"✅ Live {scen_crop} futures ({contract_symbol}): ${default_spot:.2f}"
     else:
         default_spot = round(last_actual, 2)
-        live_label = f"📊 Using {int(ref['year'])} actual price (live unavailable): ${default_spot:.2f}"
-        has_live = False
+        live_status = f"📊 Using {int(ref['year'])} actual price (live unavailable): ${default_spot:.2f}"
 
     if spot_key not in st.session_state:
         st.session_state[spot_key] = default_spot
 
-    # Show live price status
-    st.caption(live_label)
+    # Show live price status prominently
+    st.caption(live_status)
 
-    # Layout: Text input + Live button side by side
+    # Create layout: price input + live button side by side
     col_input, col_btn = st.columns([3, 1])
 
     with col_input:
         spot_price = st.number_input(
-            "Enter your price ($/bu):",
+            "Enter your price:",
             min_value=0.50,
             max_value=50.00,
             value=float(st.session_state[spot_key]),
             step=0.05,
             format="%.2f",
             key=f"_spot_num_{scen_crop}",
-            help="Type your own price estimate, current cash, or use the Live button to reset",
+            help="Type your own price estimate, cash price, or use the live price",
         )
         st.session_state[spot_key] = spot_price
 
     with col_btn:
-        if has_live:
+        if current_price is not None:
             def _reset_to_live():
                 st.session_state[spot_key] = default_spot
                 st.session_state[f"_spot_num_{scen_crop}"] = default_spot
-            st.button(
-                "📡 Live",
-                key=f"_live_btn_{scen_crop}",
-                on_click=_reset_to_live,
-                use_container_width=True,
-                help=f"Reset to live BarChart price: ${default_spot:.2f}",
-            )
+            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live, use_container_width=True,
+                     help=f"Reset to current BarChart price (${default_spot:.2f})")
+        else:
+            st.button("–", key=f"_live_btn_{scen_crop}", disabled=True, use_container_width=True,
+                     help="Live price unavailable")
 
     # Model-implied price: price = b0 + b1 * K * P_spot * G
     # where G = (S/U)^(1/ε), K is a normalization constant, and P_spot is the user's spot price
