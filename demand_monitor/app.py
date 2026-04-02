@@ -472,12 +472,13 @@ def _safe_compute_g(supply: float, usage: float, elasticity: float) -> float | N
 def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
     """
     Fetch current futures price from BarChart.com.
-    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSZ26" for Nov soybeans.
+    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
     Returns the last price in $/bu, or None if fetch fails.
 
-    BarChart shows prices in CBOT format: "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
-    Uses validation against historical precedent: prices must fall within 400-550 cents
-    and match realistic corn/soybean futures ranges (3.5–6.0 $/bu).
+    BarChart shows prices in CBOT cents-eighths format: "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
+    Validates against historical ranges:
+      - Corn (ZC): 400–550 cents ($4.00–$5.50)
+      - Soybeans (ZS): 900–1250 cents ($9.00–$12.50)
     """
     import re
 
@@ -490,8 +491,12 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         # Soybeans (ZSX26): https://www.barchart.com/futures/quotes/ZSX26/options?futuresOptionsView=merged
         if contract_symbol.startswith("ZC"):
             url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options/dec-26"
+            cents_min, cents_max = 400, 550
+            price_min, price_max = 3.5, 6.0
         else:  # Soybeans (ZSX26)
             url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options?futuresOptionsView=merged"
+            cents_min, cents_max = 900, 1250
+            price_min, price_max = 9.0, 12.5
 
         # Fetch with user-agent to avoid blocking; increase timeout for Streamlit Cloud
         headers = {
@@ -504,22 +509,22 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
 
         # Find all potential prices in CBOT cents-eighths format: "XXX-X" or "XXXX-X"
         # E.g., "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
+        # E.g., "1155-4" = 1155 + 4/8 cents = 1155.5 cents = $11.555/bu
         matches = re.findall(r'(\d{3,4})-(\d)', text)
 
         if matches:
-            # Validation: Find the first match within the historical precedent range
-            # CBOT range: 400-550 cents ($4.00–$5.50), matching 25-year corn/soybean history
+            # Validation: Find the first match within the historical precedent range for this commodity
             for cents_str, eighths_str in matches:
                 cents = int(cents_str)
                 eighths = int(eighths_str)
 
-                # Validate against historical precedent
-                if 400 <= cents <= 550:
+                # Validate against commodity-specific historical precedent
+                if cents_min <= cents <= cents_max:
                     total_cents = cents + (eighths / 8.0)
                     price_dollars = total_cents / 100.0
 
-                    # Double-check for realistic futures range
-                    if 3.5 <= price_dollars <= 6.0:
+                    # Double-check against commodity-specific range
+                    if price_min <= price_dollars <= price_max:
                         return price_dollars
     except requests.exceptions.RequestException:
         # Network error, timeout, or HTTP error — fallback to None
@@ -626,8 +631,8 @@ with st.sidebar:
     )
     st.session_state[spot_key] = spot_price
 
-    # Model-implied price: price = b0 + b1 * K * G
-    # where G = (S/U)^(1/ε) and K is a normalization constant
+    # Model-implied price: price = b0 + b1 * K * P_spot * G
+    # where G = (S/U)^(1/ε), K is a normalization constant, and P_spot is the user's spot price
     G_scen = _safe_compute_g(scen_supply, scen_usage, e)
 
     # Base year values (for K calculation and inversion feature)
@@ -644,10 +649,10 @@ with st.sidebar:
     # S/U ratio (needed for guardrail and display)
     su_scen = scen_supply / max(scen_usage, 1.0)
 
-    # Predicted price = b0 + b1 * K * G
-    # This updates whenever S or U changes (changing G)
-    if G_scen is not None and K is not None:
-        ols_pred = b0 + b1 * K * G_scen
+    # Predicted price = b0 + b1 * K * P_spot * G
+    # Updates whenever S, U, or spot price changes
+    if G_scen is not None and K is not None and spot_price > 0:
+        ols_pred = b0 + b1 * K * spot_price * G_scen
     else:
         ols_pred = None
 
