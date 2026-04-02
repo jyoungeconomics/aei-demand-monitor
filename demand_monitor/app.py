@@ -125,7 +125,8 @@ def _compute_soybean_guardrail_table():
     price_vals = hist["price_real"].values
 
     def price_range_for_su(su_lo, su_hi):
-        """Find price range when S/U is between su_lo and su_hi."""
+        """Find price range when S/U is between su_lo and su_hi.
+        Falls back to broader bands if exact range has no data."""
         if su_lo is None:
             mask = su_vals <= su_hi
         elif su_hi is None:
@@ -136,7 +137,21 @@ def _compute_soybean_guardrail_table():
         if mask.any():
             prices = price_vals[mask]
             return f"${prices.min():.1f}–${prices.max():.1f}/bu"
-        return "–"
+
+        # Fallback 1: Use broader ±0.05 tolerance
+        if su_lo is None:
+            mask_broad = su_vals <= (su_hi + 0.05)
+        elif su_hi is None:
+            mask_broad = su_vals >= (su_lo - 0.05)
+        else:
+            mask_broad = (su_vals >= su_lo - 0.05) & (su_vals <= su_hi + 0.05)
+
+        if mask_broad.any():
+            prices = price_vals[mask_broad]
+            return f"${prices.min():.1f}–${prices.max():.1f}/bu"
+
+        # Fallback 2: Use full historical range as estimate
+        return f"${price_vals.min():.1f}–${price_vals.max():.1f}/bu (historical range)"
 
     return pd.DataFrame([
         {"S/U Ratio": "> 1.26",    "Market Condition": "Extremely loose",  "Status": "Danger",
@@ -274,81 +289,46 @@ with col2:
     )
 st.divider()
 
-# Sidebar toggle — inject button + JS directly into the Streamlit page.
-# Streamlit 1.55 collapses the sidebar via CSS transform:translateX(-300px),
-# and its native toggle button lives *inside* the sidebar (so it vanishes when closed).
-# We inject our own always-visible green ☰ button into the main page DOM.
-# Button injected via st.markdown (Streamlit strips <script> and event attrs,
-# so JS is attached separately via components.html using window.parent).
+# Sidebar: Keep permanently open with drag-resize handle
+# Add CSS for visual resize handle on sidebar edge
 st.markdown(
     f"""
     <style>
-      #aei-sb-btn {{
-        position: fixed; top: 6px; left: 6px; z-index: 9999999;
-        background: {AEI["green"]}; color: white; border: none;
-        border-radius: 5px; width: 32px; height: 32px;
-        font-size: 1.15rem; line-height: 32px; text-align: center;
-        cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.28); padding: 0;
+      /* Visual drag handle on the right edge of sidebar */
+      [data-testid="stSidebar"]::after {{
+        content: '⋮';
+        position: absolute;
+        right: 4px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 1.2rem;
+        color: {AEI["green"]};
+        cursor: col-resize;
+        font-weight: bold;
+        z-index: 100;
+        letter-spacing: -0.5px;
       }}
-      #aei-sb-btn:hover {{ background: {AEI["dark_green"]}; }}
     </style>
-    <button id="aei-sb-btn" title="Show / hide Scenario Panel">&#9776;</button>
     """,
     unsafe_allow_html=True,
 )
 
-# Wire up the toggle via components.html (runs in an iframe but can reach parent DOM)
+# Force sidebar to stay open (prevent Streamlit's native collapse)
 components.html(
     """
     <script>
     (function() {
         var p = window.parent;
-
-        function sb() { return p.document.querySelector('[data-testid="stSidebar"]'); }
-
-        function isOpen() {
-            var s = sb(); if (!s) return true;
-            var t = s.style.transform || p.getComputedStyle(s).transform;
-            return (t === 'none' || t === '' || t === 'translateX(0px)' || t === 'translateX(0)'
-                    || t.indexOf('matrix(1, 0, 0, 1, 0') !== -1);
-        }
-
-        function toggle() {
-            var s = sb(); if (!s) return;
-            if (isOpen()) {
-                s.style.transform = 'translateX(-110%)';
-            } else {
-                s.style.transform = 'translateX(0)';
-            }
-            s.style.transition = 'transform 0.3s';
-        }
-
-        function forceOpen() {
-            var s = sb();
+        function ensureOpen() {
+            var s = p.document.querySelector('[data-testid="stSidebar"]');
             if (s) {
-                if (!isOpen()) {
-                    s.style.transform = 'translateX(0)';
-                    s.style.transition = 'transform 0.3s';
-                }
-            } else {
-                setTimeout(forceOpen, 200);
+                s.style.transform = 'translateX(0)';
+                s.style.position = 'relative';
             }
         }
-
-        function attachBtn() {
-            var btn = p.document.getElementById('aei-sb-btn');
-            if (btn) {
-                btn.addEventListener('click', toggle);
-            } else {
-                setTimeout(attachBtn, 200);
-            }
-        }
-
-        forceOpen();
-        attachBtn();
-        // Re-run after Streamlit re-renders (it replaces DOM on each rerun)
-        setTimeout(function() { forceOpen(); attachBtn(); }, 1000);
-        setTimeout(function() { forceOpen(); attachBtn(); }, 2500);
+        ensureOpen();
+        setTimeout(ensureOpen, 500);
+        setTimeout(ensureOpen, 1500);
     })();
     </script>
     """,
@@ -591,45 +571,50 @@ with st.sidebar:
     last_actual = float(ref["price_real"])
     spot_key    = f"spot_price_{scen_crop}"
 
-    # Try to fetch current futures price from Yahoo Finance
+    # Try to fetch current futures price from BarChart
     contract_symbol = "ZCZ26" if scen_crop == "Corn" else "ZSX26"
     current_price = _get_futures_price_from_barchart(contract_symbol)
 
-    # Use fetched price if available, otherwise fall back to last actual
+    # Set default and initialize session state
     if current_price is not None:
-        # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        st.session_state[spot_key] = default_spot
-
-        # Show caption with live price and a button to reset to live
-        col_cap, col_btn = st.columns([3, 1])
-        with col_cap:
-            st.caption(f"✅ Live {scen_crop} futures ({contract_symbol}) from BarChart: ${default_spot:.2f}")
-        with col_btn:
-            def _reset_to_live():
-                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
-            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live, use_container_width=True)
-    elif spot_key not in st.session_state:
-        default_spot = round(last_actual, 2)
-        st.session_state[spot_key] = default_spot
-        st.caption(f"📊 Using {int(ref['year'])} actual price (live futures unavailable)")
+        live_status = f"✅ Live {scen_crop} futures ({contract_symbol}): ${default_spot:.2f}"
     else:
-        default_spot = st.session_state[spot_key]
-        st.caption(f"📊 Using session price (live futures unavailable)")
+        default_spot = round(last_actual, 2)
+        live_status = f"📊 Using {int(ref['year'])} actual price (live unavailable): ${default_spot:.2f}"
 
-    spot_price = st.number_input(
-        "",
-        min_value=0.50,
-        max_value=50.00,
-        value=float(st.session_state[spot_key]),
-        step=0.05,
-        format="%.2f",
-        key=f"_spot_num_{scen_crop}",
-        label_visibility="collapsed",
-        help="Enter the current cash price, Dec/Nov futures, or your own price expectation. "
-             "The model compares this market signal to its supply/usage prediction.",
-    )
-    st.session_state[spot_key] = spot_price
+    if spot_key not in st.session_state:
+        st.session_state[spot_key] = default_spot
+
+    # Show live price status prominently
+    st.caption(live_status)
+
+    # Create layout: price input + live button side by side
+    col_input, col_btn = st.columns([3, 1])
+
+    with col_input:
+        spot_price = st.number_input(
+            "Enter your price:",
+            min_value=0.50,
+            max_value=50.00,
+            value=float(st.session_state[spot_key]),
+            step=0.05,
+            format="%.2f",
+            key=f"_spot_num_{scen_crop}",
+            help="Type your own price estimate, cash price, or use the live price",
+        )
+        st.session_state[spot_key] = spot_price
+
+    with col_btn:
+        if current_price is not None:
+            def _reset_to_live():
+                st.session_state[spot_key] = default_spot
+                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
+            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live, use_container_width=True,
+                     help=f"Reset to current BarChart price (${default_spot:.2f})")
+        else:
+            st.button("–", key=f"_live_btn_{scen_crop}", disabled=True, use_container_width=True,
+                     help="Live price unavailable")
 
     # Model-implied price: price = b0 + b1 * K * P_spot * G
     # where G = (S/U)^(1/ε), K is a normalization constant, and P_spot is the user's spot price
