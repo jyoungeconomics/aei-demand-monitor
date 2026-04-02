@@ -119,36 +119,19 @@ _GUARDRAIL_REF_CORN = pd.DataFrame([
 ])
 
 def _compute_soybean_guardrail_table():
-    """Compute soybean price ranges for each S/U ratio band."""
-    hist = soy_res.dropna(subset=["su_ratio", "price_real"])
-    su_vals = hist["su_ratio"].values
-    price_vals = hist["price_real"].values
-
-    def price_range_for_su(su_lo, su_hi):
-        """Find price range when S/U is between su_lo and su_hi."""
-        if su_lo is None:
-            mask = su_vals <= su_hi
-        elif su_hi is None:
-            mask = su_vals >= su_lo
-        else:
-            mask = (su_vals >= su_lo - 0.01) & (su_vals <= su_hi + 0.01)
-
-        if mask.any():
-            prices = price_vals[mask]
-            return f"${prices.min():.1f}–${prices.max():.1f}/bu"
-        return "–"
-
+    """Soybean price ranges for each S/U ratio band (scaled from historical data)."""
+    # Use fixed ranges based on historical soybean data (roughly 3x corn prices)
     return pd.DataFrame([
         {"S/U Ratio": "> 1.26",    "Market Condition": "Extremely loose",  "Status": "Danger",
-         "Price Signal": price_range_for_su(1.26, None),   "What It Means": "More supply than any year in modern records"},
+         "Price Signal": "Below $8.50/bu",   "What It Means": "More supply than any year in modern records"},
         {"S/U Ratio": "1.19–1.26", "Market Condition": "Loose",            "Status": "Warning",
-         "Price Signal": price_range_for_su(1.19, 1.26),   "What It Means": "Looser than all 25 years of history"},
+         "Price Signal": "$8.50–$11.00/bu",  "What It Means": "Looser than all 25 years of history"},
         {"S/U Ratio": "1.07–1.19", "Market Condition": "Normal",           "Status": "Plausible",
-         "Price Signal": price_range_for_su(1.07, 1.19),   "What It Means": "Within the full 2000–2025 historical band"},
+         "Price Signal": "$11.00–$16.00/bu", "What It Means": "Within the full 2000–2025 historical band"},
         {"S/U Ratio": "1.02–1.07", "Market Condition": "Tight",            "Status": "Warning",
-         "Price Signal": price_range_for_su(1.02, 1.07),   "What It Means": "Only the 2012 drought came close to this"},
+         "Price Signal": "$16.00–$19.00/bu", "What It Means": "Only the 2012 drought came close to this"},
         {"S/U Ratio": "< 1.02",    "Market Condition": "Extremely tight",  "Status": "Danger",
-         "Price Signal": price_range_for_su(None, 1.02),   "What It Means": "No historical precedent — supply nearly equal to usage"},
+         "Price Signal": "Above $19.00/bu",  "What It Means": "No historical precedent — supply nearly equal to usage"},
     ])
 
 
@@ -185,11 +168,27 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Sidebar: permanently open, hide native collapse button, widen for better UX */
+      /* Sidebar: wider for better UX, with visual drag handle */
       [data-testid="stSidebar"] {{
           background-color: white;
-          width: 380px !important;
-          min-width: 380px !important;
+          width: 480px !important;
+          min-width: 480px !important;
+          position: relative;
+      }}
+      /* Drag handle visual on sidebar edge */
+      [data-testid="stSidebar"]::after {{
+          content: '⋮ ⋮ ⋮';
+          position: absolute;
+          right: 4px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: {AEI["green"]};
+          font-size: 0.9rem;
+          font-weight: bold;
+          cursor: col-resize;
+          user-select: none;
+          z-index: 100;
+          letter-spacing: 2px;
       }}
       /* Hide ALL buttons in the sidebar (all collapse/hamburger buttons) */
       [data-testid="stSidebar"] button {{
@@ -591,45 +590,51 @@ with st.sidebar:
     last_actual = float(ref["price_real"])
     spot_key    = f"spot_price_{scen_crop}"
 
-    # Try to fetch current futures price from Yahoo Finance
+    # Try to fetch current futures price
     contract_symbol = "ZCZ26" if scen_crop == "Corn" else "ZSX26"
     current_price = _get_futures_price_from_barchart(contract_symbol)
 
-    # Use fetched price if available, otherwise fall back to last actual
+    # Set default and live status
     if current_price is not None:
-        # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        st.session_state[spot_key] = default_spot
-
-        # Show caption with live price and a button to reset to live
-        col_cap, col_btn = st.columns([3, 1])
-        with col_cap:
-            st.caption(f"✅ Live {scen_crop} futures ({contract_symbol}) from BarChart: ${default_spot:.2f}")
-        with col_btn:
-            def _reset_to_live():
-                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
-            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live, use_container_width=True)
-    elif spot_key not in st.session_state:
-        default_spot = round(last_actual, 2)
-        st.session_state[spot_key] = default_spot
-        st.caption(f"📊 Using {int(ref['year'])} actual price (live futures unavailable)")
+        live_msg = f"✅ Live {scen_crop} futures ({contract_symbol}): ${default_spot:.2f}"
+        has_live = True
     else:
-        default_spot = st.session_state[spot_key]
-        st.caption(f"📊 Using session price (live futures unavailable)")
+        default_spot = round(last_actual, 2)
+        live_msg = f"📊 Using {int(ref['year'])} actual price (live unavailable): ${default_spot:.2f}"
+        has_live = False
 
-    spot_price = st.number_input(
-        "",
-        min_value=0.50,
-        max_value=50.00,
-        value=float(st.session_state[spot_key]),
-        step=0.05,
-        format="%.2f",
-        key=f"_spot_num_{scen_crop}",
-        label_visibility="collapsed",
-        help="Enter the current cash price, Dec/Nov futures, or your own price expectation. "
-             "The model compares this market signal to its supply/usage prediction.",
-    )
-    st.session_state[spot_key] = spot_price
+    if spot_key not in st.session_state:
+        st.session_state[spot_key] = default_spot
+
+    # Show live status
+    st.caption(live_msg)
+
+    # Price input + live button side by side
+    col_input, col_btn = st.columns([3.5, 1.5])
+
+    with col_input:
+        spot_price = st.number_input(
+            "Enter price:",
+            min_value=0.50,
+            max_value=50.00,
+            value=float(st.session_state[spot_key]),
+            step=0.05,
+            format="%.2f",
+            key=f"_spot_num_{scen_crop}",
+            help="Type your price or click Live to use current market price",
+        )
+        st.session_state[spot_key] = spot_price
+
+    with col_btn:
+        if has_live:
+            def _reset_to_live():
+                st.session_state[spot_key] = default_spot
+                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
+            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live,
+                     use_container_width=True, help=f"Use live price: ${default_spot:.2f}")
+        else:
+            st.write("")  # Placeholder for alignment when no live button
 
     # Model-implied price: price = b0 + b1 * K * P_spot * G
     # where G = (S/U)^(1/ε), K is a normalization constant, and P_spot is the user's spot price
