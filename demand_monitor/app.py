@@ -180,16 +180,9 @@ st.markdown(
           height: auto;
           min-height: 2rem;
       }}
-      /* Make hamburger/collapse button visible and easy to find */
-      button[data-testid="collapseSidebarButton"] {{
-          color: {AEI["gray"]} !important;
-          background-color: transparent !important;
-          font-size: 1.5rem !important;
-          padding: 0.25rem 0.5rem !important;
-      }}
-      button[data-testid="collapseSidebarButton"]:hover {{
-          background-color: rgba(96,157,66,0.1) !important;
-          color: {AEI["green"]} !important;
+      /* Sidebar content colours */
+      [data-testid="stSidebar"] {{
+          background-color: white;
       }}
       .aei-title {{
           color: {AEI["navy"]};
@@ -260,27 +253,81 @@ with col2:
     )
 st.divider()
 
-# Force sidebar open and keep hamburger button prominent
+# Sidebar toggle — inject button + JS directly into the Streamlit page.
+# Streamlit 1.55 collapses the sidebar via CSS transform:translateX(-300px),
+# and its native toggle button lives *inside* the sidebar (so it vanishes when closed).
+# We inject our own always-visible green ☰ button into the main page DOM.
+# Button injected via st.markdown (Streamlit strips <script> and event attrs,
+# so JS is attached separately via components.html using window.parent).
+st.markdown(
+    f"""
+    <style>
+      #aei-sb-btn {{
+        position: fixed; top: 6px; left: 6px; z-index: 9999999;
+        background: {AEI["green"]}; color: white; border: none;
+        border-radius: 5px; width: 32px; height: 32px;
+        font-size: 1.15rem; line-height: 32px; text-align: center;
+        cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.28); padding: 0;
+      }}
+      #aei-sb-btn:hover {{ background: {AEI["dark_green"]}; }}
+    </style>
+    <button id="aei-sb-btn" title="Show / hide Scenario Panel">&#9776;</button>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Wire up the toggle via components.html (runs in an iframe but can reach parent DOM)
 components.html(
     """
     <script>
     (function() {
-        // Clear any cached collapsed state so sidebar starts open
-        Object.keys(localStorage).forEach(function(key) {
-            if (key.includes('sidebar') || key.includes('Sidebar')) {
-                localStorage.removeItem(key);
+        var p = window.parent;
+
+        function sb() { return p.document.querySelector('[data-testid="stSidebar"]'); }
+
+        function isOpen() {
+            var s = sb(); if (!s) return true;
+            var t = s.style.transform || p.getComputedStyle(s).transform;
+            return (t === 'none' || t === '' || t === 'translateX(0px)' || t === 'translateX(0)'
+                    || t.indexOf('matrix(1, 0, 0, 1, 0') !== -1);
+        }
+
+        function toggle() {
+            var s = sb(); if (!s) return;
+            if (isOpen()) {
+                s.style.transform = 'translateX(-110%)';
+            } else {
+                s.style.transform = 'translateX(0)';
             }
-        });
-        // Slide sidebar into view if it is off-screen
-        function ensureSidebarOpen() {
-            var sb = window.parent.document.querySelector('[data-testid="stSidebar"]');
-            if (sb && parseInt(window.parent.getComputedStyle(sb).left) < 0) {
-                var btn = window.parent.document.querySelector('button[data-testid="collapseSidebarButton"]');
-                if (btn) btn.click();
+            s.style.transition = 'transform 0.3s';
+        }
+
+        function forceOpen() {
+            var s = sb();
+            if (s) {
+                if (!isOpen()) {
+                    s.style.transform = 'translateX(0)';
+                    s.style.transition = 'transform 0.3s';
+                }
+            } else {
+                setTimeout(forceOpen, 200);
             }
         }
-        setTimeout(ensureSidebarOpen, 300);
-        setTimeout(ensureSidebarOpen, 800);
+
+        function attachBtn() {
+            var btn = p.document.getElementById('aei-sb-btn');
+            if (btn) {
+                btn.addEventListener('click', toggle);
+            } else {
+                setTimeout(attachBtn, 200);
+            }
+        }
+
+        forceOpen();
+        attachBtn();
+        // Re-run after Streamlit re-renders (it replaces DOM on each rerun)
+        setTimeout(function() { forceOpen(); attachBtn(); }, 1000);
+        setTimeout(function() { forceOpen(); attachBtn(); }, 2500);
     })();
     </script>
     """,
