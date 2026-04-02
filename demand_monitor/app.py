@@ -126,32 +126,33 @@ def _compute_soybean_guardrail_table():
 
     def price_range_for_su(su_lo, su_hi):
         """Find price range when S/U is between su_lo and su_hi.
-        Falls back to broader bands if exact range has no data."""
+        Uses broader matching bands for soybeans than corn."""
+        # Use ±0.03 tolerance for soybeans (more forgiving due to fewer datapoints)
         if su_lo is None:
-            mask = su_vals <= su_hi
+            mask = su_vals <= su_hi + 0.03
         elif su_hi is None:
-            mask = su_vals >= su_lo
+            mask = su_vals >= su_lo - 0.03
         else:
-            mask = (su_vals >= su_lo - 0.01) & (su_vals <= su_hi + 0.01)
+            mask = (su_vals >= su_lo - 0.03) & (su_vals <= su_hi + 0.03)
 
         if mask.any():
             prices = price_vals[mask]
             return f"${prices.min():.1f}–${prices.max():.1f}/bu"
 
-        # Fallback 1: Use broader ±0.05 tolerance
+        # Fallback: Use even wider ±0.10 tolerance
         if su_lo is None:
-            mask_broad = su_vals <= (su_hi + 0.05)
+            mask_wide = su_vals <= su_hi + 0.10
         elif su_hi is None:
-            mask_broad = su_vals >= (su_lo - 0.05)
+            mask_wide = su_vals >= su_lo - 0.10
         else:
-            mask_broad = (su_vals >= su_lo - 0.05) & (su_vals <= su_hi + 0.05)
+            mask_wide = (su_vals >= su_lo - 0.10) & (su_vals <= su_hi + 0.10)
 
-        if mask_broad.any():
-            prices = price_vals[mask_broad]
+        if mask_wide.any():
+            prices = price_vals[mask_wide]
             return f"${prices.min():.1f}–${prices.max():.1f}/bu"
 
-        # Fallback 2: Use full historical range as estimate
-        return f"${price_vals.min():.1f}–${price_vals.max():.1f}/bu (historical range)"
+        # Last resort: use full historical range
+        return f"${price_vals.min():.1f}–${price_vals.max():.1f}/bu"
 
     return pd.DataFrame([
         {"S/U Ratio": "> 1.26",    "Market Condition": "Extremely loose",  "Status": "Danger",
@@ -313,22 +314,72 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Force sidebar to stay open (prevent Streamlit's native collapse)
+# Sidebar drag-to-resize handler
 components.html(
     """
     <script>
     (function() {
         var p = window.parent;
+        var isResizing = false;
+        var startX = 0;
+        var startWidth = 0;
+
+        function getSidebar() {
+            return p.document.querySelector('[data-testid="stSidebar"]');
+        }
+
+        // Keep sidebar permanently open
         function ensureOpen() {
-            var s = p.document.querySelector('[data-testid="stSidebar"]');
+            var s = getSidebar();
             if (s) {
                 s.style.transform = 'translateX(0)';
                 s.style.position = 'relative';
             }
         }
+
         ensureOpen();
-        setTimeout(ensureOpen, 500);
-        setTimeout(ensureOpen, 1500);
+        setInterval(ensureOpen, 1000);
+
+        // Detect drag start on sidebar edge
+        p.document.addEventListener('mousedown', function(e) {
+            var s = getSidebar();
+            if (!s) return;
+
+            var rect = s.getBoundingClientRect();
+            var isOnEdge = Math.abs(e.clientX - rect.right) < 10;
+
+            if (isOnEdge) {
+                isResizing = true;
+                startX = e.clientX;
+                startWidth = rect.width;
+                p.document.body.style.userSelect = 'none';
+                p.document.body.style.cursor = 'col-resize';
+            }
+        });
+
+        // Handle drag
+        p.document.addEventListener('mousemove', function(e) {
+            if (!isResizing) return;
+
+            var s = getSidebar();
+            if (!s) return;
+
+            var delta = e.clientX - startX;
+            var newWidth = Math.max(250, Math.min(startWidth + delta, 600));
+
+            s.style.width = newWidth + 'px !important';
+            s.style.minWidth = newWidth + 'px !important';
+            s.style.maxWidth = newWidth + 'px !important';
+        });
+
+        // End drag
+        p.document.addEventListener('mouseup', function() {
+            if (isResizing) {
+                isResizing = false;
+                p.document.body.style.userSelect = 'auto';
+                p.document.body.style.cursor = 'auto';
+            }
+        });
     })();
     </script>
     """,
@@ -841,18 +892,18 @@ def compute_scenario_row(
     }
 
 
-# Pre-compute scenario rows
+# Pre-compute scenario rows - use DEFAULT (live) spot price, not user-adjusted price
 if ols_pred is not None:
     if scen_crop == "Corn":
         _corn_scen_row = compute_scenario_row(
-            corn_res, scen_supply, scen_usage, ols_pred, spot_price,
+            corn_res, scen_supply, scen_usage, ols_pred, default_spot,
             CORN_ELASTICITY, CORN_OLS_INTERCEPT, CORN_OLS_SLOPE,
         )
         _soy_scen_row = None
     else:
         _corn_scen_row = None
         _soy_scen_row = compute_scenario_row(
-            soy_res, scen_supply, scen_usage, ols_pred, spot_price,
+            soy_res, scen_supply, scen_usage, ols_pred, default_spot,
             SOYBEAN_ELASTICITY, SOYBEAN_OLS_INTERCEPT, SOYBEAN_OLS_SLOPE,
         )
 else:
