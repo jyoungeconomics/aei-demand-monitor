@@ -191,14 +191,18 @@ st.markdown(
           width: 380px !important;
           min-width: 380px !important;
       }}
-      /* Hide ALL collapse/hamburger buttons in the sidebar */
+      /* Hide ALL buttons in the sidebar (all collapse/hamburger buttons) */
       [data-testid="stSidebar"] button {{
           display: none !important;
+          visibility: hidden !important;
       }}
-      /* Extra aggressive: hide any element with aria-label containing 'sidebar' or 'menu' */
-      button[aria-label*="sidebar"],
-      button[aria-label*="menu"],
-      button[aria-label*="hamburger"] {{
+      /* Hide buttons with toolbar role (contains collapse button) */
+      [data-testid="stSidebar"] [role="toolbar"] {{
+          display: none !important;
+      }}
+      /* Extra aggressive: target any button that might toggle sidebar */
+      button[aria-expanded],
+      [data-testid*="stSidebar"] svg {{
           display: none !important;
       }}
       .aei-title {{
@@ -481,11 +485,13 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         return None
 
     try:
-        # Build BarChart URL
+        # Build BarChart URL using the actual contract symbol
+        # Corn (ZCZ26): https://www.barchart.com/futures/quotes/ZCZ26/options/dec-26
+        # Soybeans (ZSX26): https://www.barchart.com/futures/quotes/ZSX26/options?futuresOptionsView=merged
         if contract_symbol.startswith("ZC"):
-            url = "https://www.barchart.com/futures/quotes/ZCZ26/options/dec-26"
-        else:
-            url = "https://www.barchart.com/futures/quotes/ZSZ26/options/nov-26"
+            url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options/dec-26"
+        else:  # Soybeans (ZSX26)
+            url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options?futuresOptionsView=merged"
 
         # Fetch with user-agent to avoid blocking; increase timeout for Streamlit Cloud
         headers = {
@@ -588,9 +594,16 @@ with st.sidebar:
     if current_price is not None:
         # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        st.caption(f"✅ Live {scen_crop} futures ({contract_symbol}) from BarChart")
-        # Always update session state with newly fetched price
         st.session_state[spot_key] = default_spot
+
+        # Show caption with live price and a button to reset to live
+        col_cap, col_btn = st.columns([3, 1])
+        with col_cap:
+            st.caption(f"✅ Live {scen_crop} futures ({contract_symbol}) from BarChart: ${default_spot:.2f}")
+        with col_btn:
+            def _reset_to_live():
+                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
+            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live, use_container_width=True)
     elif spot_key not in st.session_state:
         default_spot = round(last_actual, 2)
         st.session_state[spot_key] = default_spot
@@ -1409,7 +1422,10 @@ def render_tab(
 col1, col2, col3 = st.columns([1, 2, 2])
 with col1:
     def _on_crop_change():
-        st.session_state.scen_crop = st.session_state._crop_radio
+        # Extract crop name without emoji (e.g., "🌽 Corn" → "Corn")
+        if st.session_state._crop_radio:
+            st.session_state.scen_crop = st.session_state._crop_radio.split()[-1]
+
     st.radio(
         "Select Crop",
         ["🌽 Corn", "🫘 Soybeans"],
@@ -1418,9 +1434,6 @@ with col1:
         horizontal=True,
         label_visibility="collapsed",
     )
-    # Extract crop name without emoji for session state
-    if st.session_state._crop_radio:
-        st.session_state.scen_crop = st.session_state._crop_radio.split()[-1]
 
 if scen_crop == "Corn":
     st.markdown(f"### 🌽 Corn")
