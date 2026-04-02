@@ -125,7 +125,9 @@ def _compute_soybean_guardrail_table():
     price_vals = hist["price_real"].values
 
     def price_range_for_su(su_lo, su_hi):
-        """Find price range when S/U is between su_lo and su_hi."""
+        """Find price range when S/U is between su_lo and su_hi.
+        Use progressive fallback: exact, then wider bands, then estimate from closest data."""
+        # Try exact match first
         if su_lo is None:
             mask = su_vals <= su_hi
         elif su_hi is None:
@@ -136,7 +138,34 @@ def _compute_soybean_guardrail_table():
         if mask.any():
             prices = price_vals[mask]
             return f"${prices.min():.1f}–${prices.max():.1f}/bu"
-        return "–"
+
+        # Fallback 1: Use wider tolerance (±0.05)
+        if su_lo is None:
+            mask_wide = su_vals <= (su_hi + 0.05)
+        elif su_hi is None:
+            mask_wide = su_vals >= (su_lo - 0.05)
+        else:
+            mask_wide = (su_vals >= su_lo - 0.05) & (su_vals <= su_hi + 0.05)
+
+        if mask_wide.any():
+            prices = price_vals[mask_wide]
+            return f"${prices.min():.1f}–${prices.max():.1f}/bu"
+
+        # Fallback 2: Use nearest quartile of data
+        # For extreme high S/U (loose), use lowest 25% prices; for extreme low S/U (tight), use highest 25%
+        if su_hi is None and su_lo is not None:  # su_lo with no upper bound (tight scenario)
+            # Tight = high prices, use top 25%
+            cutoff = np.percentile(price_vals, 75)
+            prices = price_vals[price_vals >= cutoff]
+            return f"${prices.min():.1f}–${prices.max():.1f}/bu (est.)"
+        elif su_lo is None:  # su_hi with no lower bound (loose scenario)
+            # Loose = low prices, use bottom 25%
+            cutoff = np.percentile(price_vals, 25)
+            prices = price_vals[price_vals <= cutoff]
+            return f"${prices.min():.1f}–${prices.max():.1f}/bu (est.)"
+
+        # Final fallback: use full range
+        return f"${price_vals.min():.1f}–${price_vals.max():.1f}/bu"
 
     return pd.DataFrame([
         {"S/U Ratio": "> 1.26",    "Market Condition": "Extremely loose",  "Status": "Danger",
@@ -274,81 +303,99 @@ with col2:
     )
 st.divider()
 
-# Sidebar toggle — inject button + JS directly into the Streamlit page.
-# Streamlit 1.55 collapses the sidebar via CSS transform:translateX(-300px),
-# and its native toggle button lives *inside* the sidebar (so it vanishes when closed).
-# We inject our own always-visible green ☰ button into the main page DOM.
-# Button injected via st.markdown (Streamlit strips <script> and event attrs,
-# so JS is attached separately via components.html using window.parent).
+# Sidebar: Keep permanently open + add drag-to-resize functionality
 st.markdown(
     f"""
     <style>
-      #aei-sb-btn {{
-        position: fixed; top: 6px; left: 6px; z-index: 9999999;
-        background: {AEI["green"]}; color: white; border: none;
-        border-radius: 5px; width: 32px; height: 32px;
-        font-size: 1.15rem; line-height: 32px; text-align: center;
-        cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.28); padding: 0;
+      /* Visual drag handle on sidebar right edge */
+      [data-testid="stSidebar"]::after {{
+        content: '⋮';
+        position: absolute;
+        right: 6px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 1.4rem;
+        color: {AEI["green"]};
+        cursor: col-resize;
+        font-weight: bold;
+        user-select: none;
+        z-index: 999;
       }}
-      #aei-sb-btn:hover {{ background: {AEI["dark_green"]}; }}
+      [data-testid="stSidebar"] {{
+        position: relative;
+      }}
     </style>
-    <button id="aei-sb-btn" title="Show / hide Scenario Panel">&#9776;</button>
     """,
     unsafe_allow_html=True,
 )
 
-# Wire up the toggle via components.html (runs in an iframe but can reach parent DOM)
+# Keep sidebar open and add drag-to-resize handler
 components.html(
     """
     <script>
     (function() {
         var p = window.parent;
+        var isResizing = false;
+        var currentX = 0;
 
-        function sb() { return p.document.querySelector('[data-testid="stSidebar"]'); }
-
-        function isOpen() {
-            var s = sb(); if (!s) return true;
-            var t = s.style.transform || p.getComputedStyle(s).transform;
-            return (t === 'none' || t === '' || t === 'translateX(0px)' || t === 'translateX(0)'
-                    || t.indexOf('matrix(1, 0, 0, 1, 0') !== -1);
-        }
-
-        function toggle() {
-            var s = sb(); if (!s) return;
-            if (isOpen()) {
-                s.style.transform = 'translateX(-110%)';
-            } else {
-                s.style.transform = 'translateX(0)';
-            }
-            s.style.transition = 'transform 0.3s';
+        function getSidebar() {
+            return p.document.querySelector('[data-testid="stSidebar"]');
         }
 
         function forceOpen() {
-            var s = sb();
-            if (s) {
-                if (!isOpen()) {
-                    s.style.transform = 'translateX(0)';
-                    s.style.transition = 'transform 0.3s';
-                }
-            } else {
-                setTimeout(forceOpen, 200);
+            var sb = getSidebar();
+            if (sb) {
+                sb.style.transform = 'translateX(0)';
+                sb.style.position = 'relative';
             }
         }
 
-        function attachBtn() {
-            var btn = p.document.getElementById('aei-sb-btn');
-            if (btn) {
-                btn.addEventListener('click', toggle);
-            } else {
-                setTimeout(attachBtn, 200);
-            }
-        }
-
+        // Keep sidebar permanently open
         forceOpen();
-        attachBtn();
-        // Re-run after Streamlit re-renders (it replaces DOM on each rerun)
-        setTimeout(function() { forceOpen(); attachBtn(); }, 1000);
-        setTimeout(function() { forceOpen(); attachBtn(); }, 2500);
+        setInterval(forceOpen, 500);
+
+        // Add drag-to-resize handler
+        p.document.addEventListener('mousedown', function(e) {
+            var sb = getSidebar();
+            if (!sb) return;
+
+            var rect = sb.getBoundingClientRect();
+            var isNearEdge = e.clientX >= rect.right - 15 && e.clientX <= rect.right + 2;
+
+            if (isNearEdge) {
+                isResizing = true;
+                currentX = e.clientX;
+                sb.style.userSelect = 'none';
+                p.document.body.style.cursor = 'col-resize';
+            }
+        });
+
+        p.document.addEventListener('mousemove', function(e) {
+            if (!isResizing) return;
+
+            var sb = getSidebar();
+            if (!sb) return;
+
+            var delta = e.clientX - currentX;
+            var currentWidth = parseInt(p.getComputedStyle(sb).width);
+            var newWidth = Math.max(250, Math.min(currentWidth + delta, 600));
+
+            sb.style.width = newWidth + 'px !important';
+            sb.style.minWidth = newWidth + 'px !important';
+            currentX = e.clientX;
+            p.document.body.style.cursor = 'col-resize';
+        });
+
+        p.document.addEventListener('mouseup', function() {
+            if (isResizing) {
+                isResizing = false;
+                var sb = getSidebar();
+                if (sb) {
+                    sb.style.userSelect = 'auto';
+                }
+                p.document.body.style.cursor = 'auto';
+            }
+        });
     })();
     </script>
     """,
@@ -591,45 +638,54 @@ with st.sidebar:
     last_actual = float(ref["price_real"])
     spot_key    = f"spot_price_{scen_crop}"
 
-    # Try to fetch current futures price from Yahoo Finance
+    # Try to fetch current futures price
     contract_symbol = "ZCZ26" if scen_crop == "Corn" else "ZSX26"
     current_price = _get_futures_price_from_barchart(contract_symbol)
 
-    # Use fetched price if available, otherwise fall back to last actual
+    # Set defaults
     if current_price is not None:
-        # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        st.session_state[spot_key] = default_spot
-
-        # Show caption with live price and a button to reset to live
-        col_cap, col_btn = st.columns([3, 1])
-        with col_cap:
-            st.caption(f"✅ Live {scen_crop} futures ({contract_symbol}) from BarChart: ${default_spot:.2f}")
-        with col_btn:
-            def _reset_to_live():
-                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
-            st.button("📡 Live", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live, use_container_width=True)
-    elif spot_key not in st.session_state:
-        default_spot = round(last_actual, 2)
-        st.session_state[spot_key] = default_spot
-        st.caption(f"📊 Using {int(ref['year'])} actual price (live futures unavailable)")
+        live_label = f"✅ Live {scen_crop} futures ({contract_symbol}): ${default_spot:.2f}"
+        has_live = True
     else:
-        default_spot = st.session_state[spot_key]
-        st.caption(f"📊 Using session price (live futures unavailable)")
+        default_spot = round(last_actual, 2)
+        live_label = f"📊 Using {int(ref['year'])} actual price (live unavailable): ${default_spot:.2f}"
+        has_live = False
 
-    spot_price = st.number_input(
-        "",
-        min_value=0.50,
-        max_value=50.00,
-        value=float(st.session_state[spot_key]),
-        step=0.05,
-        format="%.2f",
-        key=f"_spot_num_{scen_crop}",
-        label_visibility="collapsed",
-        help="Enter the current cash price, Dec/Nov futures, or your own price expectation. "
-             "The model compares this market signal to its supply/usage prediction.",
-    )
-    st.session_state[spot_key] = spot_price
+    if spot_key not in st.session_state:
+        st.session_state[spot_key] = default_spot
+
+    # Show live price status
+    st.caption(live_label)
+
+    # Layout: Text input + Live button side by side
+    col_input, col_btn = st.columns([3, 1])
+
+    with col_input:
+        spot_price = st.number_input(
+            "Enter your price ($/bu):",
+            min_value=0.50,
+            max_value=50.00,
+            value=float(st.session_state[spot_key]),
+            step=0.05,
+            format="%.2f",
+            key=f"_spot_num_{scen_crop}",
+            help="Type your own price estimate, current cash, or use the Live button to reset",
+        )
+        st.session_state[spot_key] = spot_price
+
+    with col_btn:
+        if has_live:
+            def _reset_to_live():
+                st.session_state[spot_key] = default_spot
+                st.session_state[f"_spot_num_{scen_crop}"] = default_spot
+            st.button(
+                "📡 Live",
+                key=f"_live_btn_{scen_crop}",
+                on_click=_reset_to_live,
+                use_container_width=True,
+                help=f"Reset to live BarChart price: ${default_spot:.2f}",
+            )
 
     # Model-implied price: price = b0 + b1 * K * P_spot * G
     # where G = (S/U)^(1/ε), K is a normalization constant, and P_spot is the user's spot price
@@ -1261,40 +1317,40 @@ def farmer_table(
 # ---------------------------------------------------------------------------
 
 def render_guardrail_table(crop_name: str) -> None:
-    """Show the historical S/U ratio reference table in an expander."""
-    with st.expander("📊 Historical Market Balance Reference (S/U Ratio Guide)", expanded=False):
-        st.caption(
-            "The supply-to-usage (S/U) ratio is the single most important number "
-            "in this model. It measures how much total supply there is relative to "
-            "total usage. Over the past 25 years of markets, this ratio has "
-            "stayed in a narrow band — use the table below to put any scenario in context."
-        )
+    """Show the historical S/U ratio reference table (always visible)."""
+    st.markdown("### 📊 Historical Market Balance Reference (S/U Ratio Guide)")
+    st.caption(
+        "The supply-to-usage (S/U) ratio is the single most important number "
+        "in this model. It measures how much total supply there is relative to "
+        "total usage. Over the past 25 years of markets, this ratio has "
+        "stayed in a narrow band — use the table below to put any scenario in context."
+    )
 
-        # Show crop-specific table
-        if crop_name.lower() == "soybeans":
-            tbl = _compute_soybean_guardrail_table()
-            crop_label = "Soybeans"
-        else:
-            tbl = _GUARDRAIL_REF_CORN
-            crop_label = "Corn"
+    # Show crop-specific table
+    if crop_name.lower() == "soybeans":
+        tbl = _compute_soybean_guardrail_table()
+        crop_label = "Soybeans"
+    else:
+        tbl = _GUARDRAIL_REF_CORN
+        crop_label = "Corn"
 
-        def _row_style(row):
-            status = row["Status"]
-            color  = _STATUS_COLOR.get(status.lower(), "#000000")
-            return [f"background-color: {color}18; color: {AEI['navy']}" for _ in row]
+    def _row_style(row):
+        status = row["Status"]
+        color  = _STATUS_COLOR.get(status.lower(), "#000000")
+        return [f"background-color: {color}18; color: {AEI['navy']}" for _ in row]
 
-        styled = (
-            tbl.style
-            .apply(_row_style, axis=1)
-            .set_properties(**{"text-align": "left"})
-            .hide(axis="index")
-        )
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+    styled = (
+        tbl.style
+        .apply(_row_style, axis=1)
+        .set_properties(**{"text-align": "left"})
+        .hide(axis="index")
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
-        st.caption(
-            f"Historical price ranges are actual {crop_label.lower()} prices from USDA "
-            f"(2000–2025, real 2025 dollars). Source: WASDE & AEI Demand Model."
-        )
+    st.caption(
+        f"Historical price ranges are actual {crop_label.lower()} prices from USDA "
+        f"(2000–2025, real 2025 dollars). Source: WASDE & AEI Demand Model."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1384,9 +1440,6 @@ def render_tab(
         "Supply & use in million bushels"
     )
 
-    # ---- Historical S/U reference table ----
-    render_guardrail_table(crop_label)
-
     # ---- Scenario supply/usage chart (with click-to-set coords) ----
     if scenario_supply is not None and scenario_usage is not None and scenario_price is not None:
         st.markdown("---")
@@ -1417,6 +1470,10 @@ def render_tab(
                 st.session_state[supply_key] = float(clicked_s)
                 st.session_state[usage_key]  = float(clicked_u)
                 st.rerun()
+
+    # ---- Historical S/U reference table (now after scatter plot) ----
+    st.markdown("---")
+    render_guardrail_table(crop_label)
 
 
 # ---------------------------------------------------------------------------
