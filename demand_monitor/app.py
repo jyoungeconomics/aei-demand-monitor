@@ -593,36 +593,29 @@ with st.sidebar:
 
     # Model price display
     if ratio_pred is not None:
-        st.markdown("**Model-implied price**")
-        # Show OLS prediction (always available)
+        st.markdown("**Predicted price**")
         st.markdown(
             f'<div class="scenario-box">'
             f'<span style="font-size:1.4rem; font-weight:700; color:{AEI["navy"]}">'
-            f"${ols_pred:.2f}<small>/bu</small></span><br>"
+            f'${ols_pred:.2f}<small>/bu</small></span><br>'
             f'<span style="color:{AEI["gray"]}; font-size:0.78rem;">'
-            f"OLS model &nbsp;|&nbsp; S/U ratio: {su_scen:.3f}"
-            f"</span></div>",
+            f'S/U ratio: {su_scen:.3f}'
+            f'</span></div>',
             unsafe_allow_html=True,
         )
-        # Show ratio prediction for reference
-        if ratio_pred is not None:
-            st.caption(f"Ratio method: ${ratio_pred:.2f}/bu")
 
-        # Comparisons
-        delta_ols     = ols_pred - spot_price
-        delta_actual  = ols_pred - last_actual
-        sign_m  = "+" if delta_ols  >= 0 else ""
-        sign_a  = "+" if delta_actual >= 0 else ""
-        col_m   = AEI["green"] if delta_ols  >= 0 else AEI["red"]
-        col_a   = AEI["green"] if delta_actual >= 0 else AEI["red"]
-        st.markdown(
-            f'<span style="color:{col_m}; font-weight:600; font-size:0.85rem;">'
-            f"vs your price: {sign_m}${abs(delta_ols):.2f}"
-            f"</span><br>"
-            f'<span style="color:{col_a}; font-weight:600; font-size:0.85rem;">'
-            f"vs {int(ref['year'])} actual: {sign_a}${abs(delta_actual):.2f}"
-            f"</span>",
-            unsafe_allow_html=True,
+        # Comparisons — one st.metric each so no raw HTML can leak
+        delta_ols    = ols_pred - spot_price
+        delta_actual = ols_pred - last_actual
+        st.metric(
+            label=f"vs your price (${spot_price:.2f})",
+            value=f"${ols_pred:.2f}",
+            delta=f"{delta_ols:+.2f}",
+        )
+        st.metric(
+            label=f"vs {int(ref['year'])} actual (${last_actual:.2f})",
+            value=f"${ols_pred:.2f}",
+            delta=f"{delta_actual:+.2f}",
         )
     else:
         st.warning("Cannot compute model price — check supply and usage values.")
