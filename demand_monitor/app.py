@@ -228,18 +228,22 @@ st.markdown(
           width: 16px;
           text-align: center;
       }}
-      /* Hide ALL buttons in the sidebar (all collapse/hamburger buttons) */
-      [data-testid="stSidebar"] button {{
+      /* Hide collapse/hamburger buttons but keep user-facing buttons */
+      [data-testid="stSidebar"] [role="toolbar"] button,
+      [data-testid="stSidebar"] button[aria-expanded],
+      [data-testid="stSidebar"] header button {{
           display: none !important;
           visibility: hidden !important;
       }}
-      /* Hide buttons with toolbar role (contains collapse button) */
-      [data-testid="stSidebar"] [role="toolbar"] {{
-          display: none !important;
+      /* Ensure live price button is VISIBLE */
+      [data-testid="stSidebar"] button[key*="live_btn"],
+      [data-testid="stSidebar"] button:has-text("Live") {{
+          display: inline-block !important;
+          visibility: visible !important;
       }}
-      /* Extra aggressive: target any button that might toggle sidebar */
-      button[aria-expanded],
-      [data-testid*="stSidebar"] svg {{
+      /* Hide SVG icons that are collapse buttons */
+      [data-testid="stSidebar"] header svg,
+      [data-testid="stSidebar"] [role="toolbar"] svg {{
           display: none !important;
       }}
       .aei-title {{
@@ -308,7 +312,8 @@ st.markdown(
             // Handle mousedown on the drag handle (the ::after pseudo-element area)
             resizeHandler.addEventListener('mousedown', function(e) {
                 // Only trigger resize if clicking on the right edge (drag handle area)
-                if (e.clientX < resizeHandler.offsetLeft + resizeHandler.offsetWidth - 30) {
+                // Extended to 50px to make the dots fully draggable
+                if (e.clientX < resizeHandler.offsetLeft + resizeHandler.offsetWidth - 50) {
                     return;
                 }
 
