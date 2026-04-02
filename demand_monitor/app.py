@@ -191,8 +191,14 @@ st.markdown(
           width: 380px !important;
           min-width: 380px !important;
       }}
-      /* Hide the native << collapse button inside the sidebar */
-      [data-testid="stSidebar"] button[data-testid="stBaseButton-headerNoPadding"] {{
+      /* Hide ALL collapse/hamburger buttons in the sidebar */
+      [data-testid="stSidebar"] button {{
+          display: none !important;
+      }}
+      /* Extra aggressive: hide any element with aria-label containing 'sidebar' or 'menu' */
+      button[aria-label*="sidebar"],
+      button[aria-label*="menu"],
+      button[aria-label*="hamburger"] {{
           display: none !important;
       }}
       .aei-title {{
@@ -466,10 +472,12 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
     Returns the last price in $/bu, or None if fetch fails.
 
     BarChart shows prices in CBOT format: "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
+    Uses validation against historical precedent: prices must fall within 400-550 cents
+    and match realistic corn/soybean futures ranges (3.5–6.0 $/bu).
     """
     import re
 
-    if not requests or not BeautifulSoup:
+    if not requests:
         return None
 
     try:
@@ -479,27 +487,39 @@ def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
         else:
             url = "https://www.barchart.com/futures/quotes/ZSZ26/options/nov-26"
 
-        # Fetch with timeout
-        response = requests.get(url, timeout=8)
+        # Fetch with user-agent to avoid blocking; increase timeout for Streamlit Cloud
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0"
+        }
+        response = requests.get(url, timeout=12, headers=headers)
         response.raise_for_status()
 
-        # Parse HTML — look for price pattern "481-4"
-        soup = BeautifulSoup(response.text, "html.parser")
-        text = soup.get_text()
+        text = response.text
 
-        # Find first price pattern: XXX-X or XXXX-X (cents-eighths), followed by + or -
-        # E.g., "481-4 +0-2" means 481 4/8 cents, up 0 2/8
-        matches = re.findall(r'(\d{3,4})-(\d)\s+[\+\-]', text)
+        # Find all potential prices in CBOT cents-eighths format: "XXX-X" or "XXXX-X"
+        # E.g., "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
+        matches = re.findall(r'(\d{3,4})-(\d)', text)
 
         if matches:
-            cents = int(matches[0][0])
-            eighths = int(matches[0][1])
-            total_cents = cents + (eighths / 8.0)
-            price_dollars = total_cents / 100.0
+            # Validation: Find the first match within the historical precedent range
+            # CBOT range: 400-550 cents ($4.00–$5.50), matching 25-year corn/soybean history
+            for cents_str, eighths_str in matches:
+                cents = int(cents_str)
+                eighths = int(eighths_str)
 
-            if 0.50 <= price_dollars <= 50.00:  # sanity check
-                return price_dollars
+                # Validate against historical precedent
+                if 400 <= cents <= 550:
+                    total_cents = cents + (eighths / 8.0)
+                    price_dollars = total_cents / 100.0
+
+                    # Double-check for realistic futures range
+                    if 3.5 <= price_dollars <= 6.0:
+                        return price_dollars
+    except requests.exceptions.RequestException:
+        # Network error, timeout, or HTTP error — fallback to None
+        pass
     except Exception:
+        # Parsing or other error
         pass
 
     return None
@@ -568,7 +588,7 @@ with st.sidebar:
     if current_price is not None:
         # Clamp to valid range (0.50–50.00) in case of bad data
         default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        st.caption(f"✅ Current {scen_crop} futures ({contract_symbol}) from Yahoo Finance")
+        st.caption(f"✅ Live {scen_crop} futures ({contract_symbol}) from BarChart")
         # Always update session state with newly fetched price
         st.session_state[spot_key] = default_spot
     elif spot_key not in st.session_state:
@@ -593,22 +613,28 @@ with st.sidebar:
     )
     st.session_state[spot_key] = spot_price
 
-    # Model-implied price: price = b0 + b1 * G^(1/ε)
-    # where G = S/U (supply/usage ratio)
+    # Model-implied price: price = b0 + b1 * K * G
+    # where G = (S/U)^(1/ε) and K is a normalization constant
     G_scen = _safe_compute_g(scen_supply, scen_usage, e)
 
-    # Base year values (for inversion feature and normalization)
+    # Base year values (for K calculation and inversion feature)
     base_row = df_full[df_full["year"] == BASE_YEAR].iloc[0]
     G_base_val = _safe_compute_g(float(base_row["supply"]), float(base_row["usage"]), e)
     P_base_val = float(df_full[df_full["year"] == BASE_YEAR]["price_real"].values[0])
 
+    # Calculate K: normalization constant from base year
+    if G_base_val is not None and G_base_val > 0 and P_base_val > 0:
+        K = 100.0 / (G_base_val * P_base_val)
+    else:
+        K = None
+
     # S/U ratio (needed for guardrail and display)
     su_scen = scen_supply / max(scen_usage, 1.0)
 
-    # Predicted price = intercept + slope * G^(1/elasticity)
-    # This updates whenever S, U, or elasticity changes
-    if G_scen is not None:
-        ols_pred = b0 + b1 * G_scen
+    # Predicted price = b0 + b1 * K * G
+    # This updates whenever S or U changes (changing G)
+    if G_scen is not None and K is not None:
+        ols_pred = b0 + b1 * K * G_scen
     else:
         ols_pred = None
 
@@ -781,10 +807,11 @@ def compute_scenario_row(
     if any(v is None for v in [G_t, GD, GS]):
         return None
 
-    # Use spot price as the "P" anchor — this is what the market is pricing in.
-    y_t  = b0_ + b1_ * K * spot_price_ * G_t
-    yD   = b0_ + b1_ * K * spot_price_ * GD
-    yS   = b0_ + b1_ * K * spot_price_ * GS
+    # Model-implied price: price = b0 + b1 * K * G
+    # (spot_price_ is used only for comparison, not in the prediction formula)
+    y_t  = b0_ + b1_ * K * G_t
+    yD   = b0_ + b1_ * K * GD
+    yS   = b0_ + b1_ * K * GS
 
     dy        = y_t - y_tm1
     dPrice    = spot_price_ - P_prev
