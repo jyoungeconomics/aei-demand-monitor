@@ -597,6 +597,11 @@ with st.sidebar:
     # where G = S/U (supply/usage ratio)
     G_scen = _safe_compute_g(scen_supply, scen_usage, e)
 
+    # Base year values (for inversion feature and normalization)
+    base_row = df_full[df_full["year"] == BASE_YEAR].iloc[0]
+    G_base_val = _safe_compute_g(float(base_row["supply"]), float(base_row["usage"]), e)
+    P_base_val = float(df_full[df_full["year"] == BASE_YEAR]["price_real"].values[0])
+
     # S/U ratio (needed for guardrail and display)
     su_scen = scen_supply / max(scen_usage, 1.0)
 
