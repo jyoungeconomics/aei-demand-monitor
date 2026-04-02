@@ -187,7 +187,7 @@ def get_guardrail_status(su_ratio: float) -> tuple[str, str, str, str]:
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="AEI Corn & Soybean Demand Monitor",
-    page_icon="🌽",
+    page_icon="🌽⚖️🫛",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -395,7 +395,7 @@ with col1:
 
 with col2:
     st.markdown(
-        f'<p class="aei-title">🌽 Corn & Soybean Demand Monitor</p>'
+        f'<p class="aei-title">🌽⚖️🫛 Corn & Soybean Demand Monitor</p>'
         f'<p class="aei-sub">Ag Economic Insights &nbsp;|&nbsp; '
         f'What USDA supply &amp; usage data say about corn and soybean prices &nbsp;|&nbsp; '
         f'Prices adjusted to 2025 dollars</p>',
@@ -913,14 +913,14 @@ with st.sidebar:
                     })
 
             if scenarios:
-                with st.expander("📋 Example (Supply, Usage) scenarios to achieve this price"):
-                    st.caption(
-                        f"If usage changes relative to last year ({int(last_usage):,} mil. bu), "
-                        f"here's what supply would need to be to maintain a {su_spot_implied:.3f} ratio "
-                        f"(and thus a ${spot_price:.2f}/bu price):"
-                    )
-                    scenario_df = pd.DataFrame(scenarios)
-                    st.dataframe(scenario_df, use_container_width=True, hide_index=True)
+                st.markdown("##### 📋 Example (Supply, Usage) scenarios to achieve this price")
+                st.caption(
+                    f"If usage changes relative to last year ({int(last_usage):,} mil. bu), "
+                    f"here's what supply would need to be to maintain a {su_spot_implied:.3f} ratio "
+                    f"(and thus a ${spot_price:.2f}/bu price):"
+                )
+                scenario_df = pd.DataFrame(scenarios)
+                st.dataframe(scenario_df, use_container_width=True, hide_index=True)
         except Exception:
             pass
 
@@ -1601,7 +1601,7 @@ with col1:
 
     st.radio(
         "Select Crop",
-        ["🌽 Corn", "🫘 Soybeans"],
+        ["🌽 Corn", "🫛 Soybeans"],
         key="_crop_radio",
         on_change=_on_crop_change,
         horizontal=True,
@@ -1619,7 +1619,7 @@ if scen_crop == "Corn":
         scenario_row    = _corn_scen_row,
     )
 else:
-    st.markdown(f"### 🫘 Soybeans")
+    st.markdown(f"### 🫛 Soybeans")
     render_tab(
         "Soybeans", soy_res, SOYBEAN_ELASTICITY,
         scenario_supply = scen_supply,
