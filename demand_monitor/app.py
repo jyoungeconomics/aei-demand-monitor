@@ -27,6 +27,11 @@ try:
 except ImportError:
     yf = None
 
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+
 from data import load_crop_data, load_real_prices
 from model import (
     BASE_YEAR,
@@ -456,36 +461,47 @@ def _safe_compute_g(supply: float, usage: float, elasticity: float) -> float | N
 
 def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
     """
-    Fetch current futures price from Yahoo Finance via yfinance.
-    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
+    Fetch current futures price from BarChart.com.
+    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSZ26" for Nov soybeans.
     Returns the last price in $/bu, or None if fetch fails.
 
-    yfinance returns CBOT prices in cents/bu, so we divide by 100 to get $/bu.
+    BarChart shows prices in CBOT format: "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
     """
-    if not yf:
+    import re
+
+    if not requests or not BeautifulSoup:
         return None
+
     try:
-        # Map to Yahoo Finance tickers
-        # ZCZ26 (Dec corn) -> ZC=F (corn futures generic)
-        # ZSX26 (Nov soybeans) -> ZS=F (soybeans futures generic)
+        # Build BarChart URL
         if contract_symbol.startswith("ZC"):
-            ticker = "ZC=F"  # Corn futures
+            url = "https://www.barchart.com/futures/quotes/ZCZ26/options/dec-26"
         else:
-            ticker = "ZS=F"  # Soybeans futures
+            url = "https://www.barchart.com/futures/quotes/ZSZ26/options/nov-26"
 
-        # Use shorter period and explicit download params for faster, more reliable fetch
-        data = yf.Ticker(ticker)
-        hist = data.history(period="1d", progress=False)
+        # Fetch with timeout
+        response = requests.get(url, timeout=8)
+        response.raise_for_status()
 
-        if hist is not None and not hist.empty and "Close" in hist.columns:
-            # yfinance returns prices in cents/bu for CBOT contracts
-            price_cents = float(hist["Close"].iloc[-1])
-            if price_cents > 0 and price_cents < 10000:  # sanity check (realistic range)
-                price_dollars = price_cents / 100.0
+        # Parse HTML — look for price pattern "481-4"
+        soup = BeautifulSoup(response.text, "html.parser")
+        text = soup.get_text()
+
+        # Find first price pattern: XXX-X or XXXX-X (cents-eighths), followed by + or -
+        # E.g., "481-4 +0-2" means 481 4/8 cents, up 0 2/8
+        matches = re.findall(r'(\d{3,4})-(\d)\s+[\+\-]', text)
+
+        if matches:
+            cents = int(matches[0][0])
+            eighths = int(matches[0][1])
+            total_cents = cents + (eighths / 8.0)
+            price_dollars = total_cents / 100.0
+
+            if 0.50 <= price_dollars <= 50.00:  # sanity check
                 return price_dollars
-    except Exception as e:
-        # Silent failure — will use fallback price
+    except Exception:
         pass
+
     return None
 
 
@@ -577,31 +593,26 @@ with st.sidebar:
     )
     st.session_state[spot_key] = spot_price
 
-    # Model-implied price (both ratio and OLS methods)
-    G_scen    = _safe_compute_g(scen_supply, scen_usage, e)
-    base_row  = df_full[df_full["year"] == BASE_YEAR].iloc[0]
-    G_base_val = _safe_compute_g(float(base_row["supply"]), float(base_row["usage"]), e)
-    P_base_val = float(df_full[df_full["year"] == BASE_YEAR]["price_real"].values[0])
+    # Model-implied price: price = b0 + b1 * G^(1/ε)
+    # where G = S/U (supply/usage ratio)
+    G_scen = _safe_compute_g(scen_supply, scen_usage, e)
 
-    # Ratio method
-    if G_scen is not None and G_base_val is not None and G_base_val > 0:
-        _rp = P_base_val * (G_scen / G_base_val)
-        ratio_pred = _rp if (math.isfinite(_rp) and 0.25 <= _rp <= 100.0) else None
-    else:
-        ratio_pred = None
-
-    # S/U ratio (needed for both OLS and guardrail)
+    # S/U ratio (needed for guardrail and display)
     su_scen = scen_supply / max(scen_usage, 1.0)
 
-    # OLS method: price = b0 + b1 * (S/U ratio)
-    ols_pred = b0 + b1 * su_scen
+    # Predicted price = intercept + slope * G^(1/elasticity)
+    # This updates whenever S, U, or elasticity changes
+    if G_scen is not None:
+        ols_pred = b0 + b1 * G_scen
+    else:
+        ols_pred = None
 
     grd_status, grd_color, grd_label, grd_msg = get_guardrail_status(su_scen)
 
     st.markdown("---")
 
     # Model price display
-    if ratio_pred is not None:
+    if ols_pred is not None:
         st.markdown("**Predicted price**")
         st.markdown(
             f'<div class="scenario-box">'
@@ -796,17 +807,17 @@ def compute_scenario_row(
 
 
 # Pre-compute scenario rows
-if ratio_pred is not None:
+if ols_pred is not None:
     if scen_crop == "Corn":
         _corn_scen_row = compute_scenario_row(
-            corn_res, scen_supply, scen_usage, ratio_pred, spot_price,
+            corn_res, scen_supply, scen_usage, ols_pred, spot_price,
             CORN_ELASTICITY, CORN_OLS_INTERCEPT, CORN_OLS_SLOPE,
         )
         _soy_scen_row = None
     else:
         _corn_scen_row = None
         _soy_scen_row = compute_scenario_row(
-            soy_res, scen_supply, scen_usage, ratio_pred, spot_price,
+            soy_res, scen_supply, scen_usage, ols_pred, spot_price,
             SOYBEAN_ELASTICITY, SOYBEAN_OLS_INTERCEPT, SOYBEAN_OLS_SLOPE,
         )
 else:
@@ -1385,7 +1396,7 @@ if scen_crop == "Corn":
         "Corn", corn_res, CORN_ELASTICITY,
         scenario_supply = scen_supply,
         scenario_usage  = scen_usage,
-        scenario_price  = ratio_pred,
+        scenario_price  = ols_pred,
         spot_price_     = spot_price,
         scenario_row    = _corn_scen_row,
     )
@@ -1395,7 +1406,7 @@ else:
         "Soybeans", soy_res, SOYBEAN_ELASTICITY,
         scenario_supply = scen_supply,
         scenario_usage  = scen_usage,
-        scenario_price  = ratio_pred,
+        scenario_price  = ols_pred,
         spot_price_     = spot_price,
         scenario_row    = _soy_scen_row,
     )
