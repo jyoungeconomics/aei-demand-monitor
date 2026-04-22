@@ -1081,6 +1081,7 @@ def scenario_ellipse_chart(
     scenario_usage: float,
     scenario_price: float,
     elasticity: float,
+    padding: float = 0.15,
 ) -> go.Figure:
     """
     Supply vs Usage scatter with:
@@ -1089,6 +1090,9 @@ def scenario_ellipse_chart(
       - 1σ / 2σ confidence ellipses.
       - Historical data points labeled by year.
       - An orange ★ at the subscriber's scenario.
+
+    Parameters:
+      padding: Fraction of data range to add as whitespace around the plot (default 0.15 = 15%).
     """
     hist        = results.dropna(subset=["supply", "usage", "price_real"])
     supply_vals = hist["supply"].values
@@ -1122,8 +1126,8 @@ def scenario_ellipse_chart(
     # Axis bounds
     all_s = np.append(supply_vals, scenario_supply)
     all_u = np.append(usage_vals,  scenario_usage)
-    s_pad = (supply_vals.max() - supply_vals.min()) * 0.04
-    u_pad = (usage_vals.max()  - usage_vals.min())  * 0.04
+    s_pad = (supply_vals.max() - supply_vals.min()) * padding
+    u_pad = (usage_vals.max()  - usage_vals.min())  * padding
     x_min = all_s.min() - s_pad
     x_max = all_s.max() + s_pad
     y_min = all_u.min() - u_pad
@@ -1432,6 +1436,7 @@ def render_tab(
     scenario_price: float | None = None,
     spot_price_: float | None = None,
     scenario_row: dict | None = None,
+    show_price_chart: bool = True,
 ) -> None:
     check = verify_decomp(results)
     if not check["pass"]:
@@ -1462,13 +1467,17 @@ def render_tab(
     st.markdown("&nbsp;")
 
     # ---- Price and decomposition charts ----
-    col_l, col_r = st.columns(2)
-    with col_l:
-        st.markdown("**Actual vs Model Price** — real 2025 $/bu")
-        st.plotly_chart(price_chart(results), width="stretch")
-    with col_r:
+    if show_price_chart:
+        col_l, col_r = st.columns(2)
+        with col_l:
+            st.markdown("**Actual vs Model Price** — real 2025 $/bu")
+            st.plotly_chart(price_chart(results), width="stretch")
+        with col_r:
+            st.markdown("**What Moved the Price?**")
+            st.plotly_chart(shapley_chart(results), width="stretch")
+    else:
         st.markdown("**What Moved the Price?**")
-        st.plotly_chart(shapley_chart(results), width="stretch")
+        st.plotly_chart(shapley_chart(results), use_container_width=True)
 
     # ---- Summary table ----
     st.markdown("---")
@@ -1563,36 +1572,92 @@ with col1:
         label_visibility="collapsed",
     )
 
-# Home page welcome message
-st.markdown("### Welcome to the AEI Demand Monitor")
-st.markdown("""
-This dashboard applies a **constant-elasticity demand framework** to USDA supply and usage data
-to produce model-implied price predictions for corn and soybeans.
+# Home page: Summary dashboard
+st.markdown("### Market Overview")
+st.caption(
+    "Use the sidebar (left) to adjust your supply/usage assumptions and explore scenarios. "
+    "Navigate to the pages above to dig deeper into prices, market balance, and what-if analysis."
+)
 
-**How it works:**
-- Select your crop in the toggle above
-- Adjust supply, usage, and prices in the sidebar (left)
-- Navigate to a page using the menu (upper left) to explore:
-  - **Price Prediction** — Historical actual vs model prices with Shapley decomposition
-  - **Implied Balance** — Your scenario in the full supply/usage/price space
-  - **Safe Zones** — Market conditions visualized by supply/usage ratio bands
+# Show current metrics for the selected crop
+current_crop_data = corn_res.iloc[-1] if scen_crop == "Corn" else soy_res.iloc[-1]
+current_year = int(current_crop_data["year"])
+current_di = current_crop_data["IV"]  # Demand Index (stored as IV internally)
+current_su = current_crop_data["su_ratio"]
+current_price = current_crop_data["price_real"]
+current_supply = current_crop_data["supply"]
+current_usage = current_crop_data["usage"]
 
-**Key metric:** The S/U (supply-to-usage) ratio is the single most important input to the model.
-Historical analysis shows this ratio stays in a 1.07–1.19 band in normal years — use the guardrail
-references on each page to understand what your scenario implies for market balance.
+# Determine demand strength label
+def get_di_label(di_val):
+    if di_val < 75:
+        return "Weak"
+    elif di_val < 100:
+        return "Below Normal"
+    elif di_val < 125:
+        return "Normal"
+    elif di_val < 150:
+        return "Above Normal"
+    else:
+        return "Strong"
 
-**About the model:**
-The model predicts equilibrium price as:
+di_label = get_di_label(current_di)
 
-P_predicted = b₀ + b₁ × K × (S/U)^(1/ε)
+st.markdown(f"## {scen_crop} — {current_year}")
 
-Where S/U is the supply-to-usage ratio and ε is the demand elasticity. The Shapley decomposition
-then attributes changes in predicted price to supply-side vs demand-side (usage) drivers.
+col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+
+with col_m1:
+    st.metric(
+        label="Demand Index",
+        value=f"{current_di:.0f}",
+        delta=f"{di_label} demand",
+        delta_color="off",
+    )
+
+with col_m2:
+    st.metric(
+        label="S/U Ratio",
+        value=f"{current_su:.3f}",
+        delta="Supply-to-usage balance",
+        delta_color="off",
+    )
+
+with col_m3:
+    st.metric(
+        label="Real Price",
+        value=f"${current_price:.2f}/bu",
+        delta="2025 dollars",
+        delta_color="off",
+    )
+
+with col_m4:
+    st.metric(
+        label="Years on Record",
+        value=f"{len(corn_res if scen_crop == 'Corn' else soy_res)}",
+        delta="2000-present",
+        delta_color="off",
+    )
+
+st.divider()
+
+st.markdown("### How to Use This Tool")
+st.markdown(f"""
+1. **Explore current market:** The metrics above show {current_year} {scen_crop} market conditions
+2. **Build a scenario:** Use the sidebar sliders to adjust your supply, usage, and price assumptions
+3. **Go deeper:** Navigate to the pages above to see:
+   - **Demand Index** — Historical farm purchasing power vs 2009 baseline
+   - **Price Prediction** — What supply & usage shifts have historically meant for prices
+   - **Safe Zones** — Where your scenario falls in the market balance space
+   - **Implied Balance** — What your price implies about the market
+
+**Key insight:** The S/U ratio (supply-to-usage) is the primary driver of prices.
+Historically, this ratio ranges from 1.07–1.19 in normal years.
+Values outside this band suggest unusual market conditions.
 """)
 
 st.divider()
 st.caption(
     "Built by AEI (Ag Economic Insights). "
-    "Prices adjusted to 2025 dollars. "
-    "Source: USDA WASDE balance sheets & CPI-U."
+    "Data: USDA WASDE. Prices: 2025 dollars."
 )

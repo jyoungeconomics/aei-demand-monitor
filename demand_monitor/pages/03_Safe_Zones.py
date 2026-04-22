@@ -18,18 +18,15 @@ from app import (
     CORN_ELASTICITY, SOYBEAN_ELASTICITY,
     BASE_YEAR,
     # Helper functions
-    scenario_ellipse_chart,
+    scenario_ellipse_chart, price_chart,
     # Color palette
     AEI,
 )
 
 st.markdown("### 🎯 Safe Zones — Market Balance Visualization")
 st.caption(
-    "Visualize your scenario (★) within historical market balance zones. "
-    "Green = normal range; yellow = unusual; red = no historical precedent. "
-    "Shaded ovals show 1σ and 2σ of the historical supply/usage relationship. "
-    "Dotted lines are iso-price contours (same model price along each line). "
-    "**Click any historical point (year label) to update your scenario.**"
+    "Explore how supply and usage changes affect prices. "
+    "Visualize your scenario (★) within historical market balance zones where prices have historically traded."
 )
 
 # Get current crop from session state
@@ -57,6 +54,27 @@ ols_pred = st.session_state.get("_cached_ols_pred", None)
 # Use a default price if not available
 if ols_pred is None:
     ols_pred = float(results.iloc[-1]["pred_price"])
+
+# ============================================================================
+# Historical Price Chart
+# ============================================================================
+
+st.markdown("#### Actual vs Model Prices — 2025 Dollars")
+st.plotly_chart(price_chart(results), use_container_width=True)
+
+st.markdown("---")
+
+# ============================================================================
+# Scenario Supply/Usage Chart (Safe Zones)
+# ============================================================================
+
+st.markdown("#### Where Does Your Scenario Fall?")
+st.caption(
+    "Green = normal range; yellow = unusual; red = no historical precedent. "
+    "Shaded ovals show 1σ and 2σ of historical supply/usage patterns. "
+    "Dotted lines are iso-price contours. "
+    "**Click any historical year to update your scenario.**"
+)
 
 # Render the scenario ellipse chart
 st.plotly_chart(

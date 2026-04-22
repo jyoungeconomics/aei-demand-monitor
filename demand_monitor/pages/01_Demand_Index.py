@@ -1,8 +1,8 @@
 """
-Demand Barometer — IV (Index Value) Tracker
+Demand Index Tracker — Market Strength Barometer
 
 Shows the relative strength of demand for corn/soybeans vs. the 2009 base year.
-IV combines supply/usage tightness with absolute price to quantify demand environment.
+The Demand Index combines supply/usage tightness with absolute price to quantify demand environment.
 """
 
 import streamlit as st
@@ -66,31 +66,38 @@ strength_color = get_strength_color(current_iv)
 # Page Layout
 # ============================================================================
 
-st.markdown(f"## {crop_label} Demand Barometer")
-
-# Info card
-st.info(
-    "**IV (Index Value)** measures the relative strength of demand for this crop vs. the 2009 baseline. "
-    "It combines supply/usage tightness with absolute price level to quantify the overall demand environment. "
-    "IV = 100 in the base year (2009)."
-)
+st.markdown(f"## {crop_label} Demand Index")
 
 # ============================================================================
-# Current IV Gauge + Large Metric
+# Current Demand Index Gauge + Metric
 # ============================================================================
 
 col_metric, col_gauge = st.columns([1, 1.5])
 
 with col_metric:
     st.metric(
-        label="Current IV",
+        label="Demand Index",
         value=f"{current_iv:.1f}",
         delta=f"{current_year} vs. 2009 baseline",
         delta_color="off",
     )
     st.markdown(
-        f"<p style='text-align: center; font-size: 1.2em; color: {strength_color}; font-weight: bold;'>"
+        f"<p style='text-align: center; font-size: 1.1em; color: {strength_color}; font-weight: bold;'>"
         f"{strength_label}</p>",
+        unsafe_allow_html=True,
+    )
+    # Add interpretation text below strength label
+    interpretation_map = {
+        "Weak Demand": "Farmers lack purchasing power. Prices likely suppressed.",
+        "Below Normal": "Demand slightly below historical average. Modest pricing pressure.",
+        "Normal Demand": "Demand within typical historical range. Balanced market.",
+        "Above Normal": "Demand above average. Favorable pricing for sellers.",
+        "Strong Demand": "Farmers have strong purchasing power. Prices likely elevated.",
+    }
+    interp_text = interpretation_map.get(strength_label, "")
+    st.markdown(
+        f"<p style='text-align: center; font-size: 0.85em; color: {AEI['gray']}; font-style: italic;'>"
+        f"{interp_text}</p>",
         unsafe_allow_html=True,
     )
 
@@ -100,7 +107,7 @@ with col_gauge:
         go.Indicator(
             mode="gauge+number+delta",
             value=current_iv,
-            title={"text": "Demand Strength Index"},
+            title={"text": "Demand Index"},
             delta={"reference": 100, "suffix": " vs. 2009"},
             gauge={
                 "axis": {"range": [0, 200]},
@@ -120,29 +127,36 @@ with col_gauge:
             },
         )
     )
-    fig_gauge.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
+    fig_gauge.update_layout(height=320, margin=dict(t=20, b=10, l=0, r=0))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
+# Info card - now below the gauge
+st.info(
+    "The **Demand Index** measures the relative strength of farmer purchasing power vs. the 2009 baseline. "
+    "It combines supply/usage market balance with real prices (2025 dollars). "
+    "Index = 100 in 2009."
+)
+
 # ============================================================================
-# Historical IV Time Series
+# Historical Demand Index Time Series
 # ============================================================================
 
-st.markdown("### Historical Demand Strength")
+st.markdown("### Historical Demand Index")
 
 fig_iv = go.Figure()
 
-# Add IV line
+# Add Demand Index line
 fig_iv.add_trace(
     go.Scatter(
         x=results["year"],
         y=results["IV"],
         mode="lines+markers",
-        name="IV",
+        name="Demand Index",
         line=dict(color=AEI["green"], width=3),
         marker=dict(size=6),
         hovertemplate=(
             "<b>%{x|%Y}</b><br>"
-            "IV: %{y:.1f}<br>"
+            "Demand Index: %{y:.1f}<br>"
             "S/U: %{customdata[0]:.2f}<br>"
             "Price (real): $%{customdata[1]:.2f}/bu<extra></extra>"
         ),
@@ -155,7 +169,7 @@ fig_iv.add_hline(
     y=100,
     line_dash="dash",
     line_color=AEI["gray"],
-    annotation_text="2009 Baseline (IV=100)",
+    annotation_text="2009 Baseline (Index=100)",
     annotation_position="right",
 )
 
@@ -187,9 +201,9 @@ fig_iv.add_hrect(
 )
 
 fig_iv.update_layout(
-    title=f"IV Time Series: {crop_label} (2000–{current_year})",
+    title=f"Demand Index Over Time: {crop_label} (2000–{current_year})",
     xaxis_title="Marketing Year",
-    yaxis_title="IV (Index Value, 2009 = 100)",
+    yaxis_title="Demand Index (2009 = 100)",
     hovermode="x unified",
     height=450,
     template="plotly_white",
@@ -224,7 +238,7 @@ with col1:
 
 with col2:
     st.metric(
-        label="5-Year Avg IV",
+        label="5-Year Avg Demand Index",
         value=f"{avg_iv_5yr:.1f}",
         delta=f"{iv_change:+.1f} from average",
     )
@@ -252,7 +266,7 @@ display_data = display_data.rename(columns={
     "su_ratio": "S/U",
     "G": "G Index",
     "price_real": "Real Price ($/bu)",
-    "IV": "IV",
+    "IV": "Demand Index",
 })
 display_data["Year"] = display_data["Year"].astype(int)
 
