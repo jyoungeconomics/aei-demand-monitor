@@ -5,7 +5,7 @@ Reads supply, usage, and price data from the master Excel workbook
 CornSBDemand.MVPData.xlsx (located in the SOYBEANS/ folder — that copy
 is more recent and contains both crops).
 
-Sheet layout (both Corn and Soybeans - bu):
+Sheet layout (Corn - bu and Soybeans - bu):
   Col 0  : Year
   Col 6  : Total Supply (million bushels)
   Col 20 : Total Usage*** (million bushels)
@@ -13,9 +13,8 @@ Sheet layout (both Corn and Soybeans - bu):
 
 Units note
 ----------
-The "Soybeans" sheet stores quantities in thousand metric tons; the
-"Soybeans - bu" sheet converts to million bushels so it is on the same
-footing as the Corn sheet.  This module always uses million-bushel units.
+Both "Corn - bu" and "Soybeans - bu" sheets store quantities already converted
+to million bushels. This module always uses million-bushel units.
 """
 
 import os
@@ -42,8 +41,9 @@ _SOC_COL_YEAR       = 0
 _SOC_COL_PRICE_REAL = 2   # 'Real MYA Price' (2025 dollars)
 
 # Which Excel sheet to read for each crop
+# Use the "-bu" (bushel) converted sheets for both crops to ensure million-bushel units
 _SHEET = {
-    "corn":     "Corn",
+    "corn":     "Corn - bu",
     "soybeans": "Soybeans - bu",
 }
 
@@ -52,6 +52,16 @@ _COL_YEAR   = 0
 _COL_SUPPLY = 6
 _COL_USAGE  = 20
 _COL_PRICE  = 12
+
+# ---------------------------------------------------------------------------
+# WASDE Monthly MYA Price Forecast
+# ---------------------------------------------------------------------------
+# Update these values monthly from WASDE publications
+# These are the MYA (marketing year average) price forecasts in $/bushel
+WASDE_MYA_PRICE = {
+    "corn":     3.85,
+    "soybeans": 10.25,
+}
 
 
 # ---------------------------------------------------------------------------

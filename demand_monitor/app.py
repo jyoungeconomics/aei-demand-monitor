@@ -32,7 +32,7 @@ try:
 except ImportError:
     BeautifulSoup = None
 
-from data import load_crop_data, load_real_prices
+from data import load_crop_data, load_real_prices, WASDE_MYA_PRICE
 from model import (
     BASE_YEAR,
     CORN_ELASTICITY,
@@ -620,71 +620,16 @@ def _safe_compute_g(supply: float, usage: float, elasticity: float) -> float | N
 # Utilities
 # ---------------------------------------------------------------------------
 
-def _get_futures_price_from_barchart(contract_symbol: str) -> float | None:
+def _get_wasde_mya_price(crop: str) -> float:
     """
-    Fetch current futures price from BarChart.com.
-    contract_symbol: e.g., "ZCZ26" for Dec corn or "ZSX26" for Nov soybeans.
-    Returns the last price in $/bu, or None if fetch fails.
+    Fetch the latest WASDE monthly MYA (marketing year average) price forecast.
 
-    BarChart shows prices in CBOT cents-eighths format: "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
-    Validates against historical ranges:
-      - Corn (ZC): 400–550 cents ($4.00–$5.50)
-      - Soybeans (ZS): 900–1250 cents ($9.00–$12.50)
+    crop: "corn" or "soybeans"
+    Returns the forecasted MYA price in $/bu from the WASDE_MYA_PRICE config dict.
+
+    To update prices: edit WASDE_MYA_PRICE dict in data.py with latest WASDE publication.
     """
-    import re
-
-    if not requests:
-        return None
-
-    try:
-        # Build BarChart URL using the actual contract symbol
-        # Corn (ZCZ26): https://www.barchart.com/futures/quotes/ZCZ26/options/dec-26
-        # Soybeans (ZSX26): https://www.barchart.com/futures/quotes/ZSX26/options?futuresOptionsView=merged
-        if contract_symbol.startswith("ZC"):
-            url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options/dec-26"
-            cents_min, cents_max = 400, 550
-            price_min, price_max = 3.5, 6.0
-        else:  # Soybeans (ZSX26)
-            url = f"https://www.barchart.com/futures/quotes/{contract_symbol}/options?futuresOptionsView=merged"
-            cents_min, cents_max = 900, 1250
-            price_min, price_max = 9.0, 12.5
-
-        # Fetch with user-agent to avoid blocking; increase timeout for Streamlit Cloud
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0"
-        }
-        response = requests.get(url, timeout=12, headers=headers)
-        response.raise_for_status()
-
-        text = response.text
-
-        # Find all potential prices in CBOT cents-eighths format: "XXX-X" or "XXXX-X"
-        # E.g., "481-4" = 481 + 4/8 cents = 481.5 cents = $4.815/bu
-        # E.g., "1155-4" = 1155 + 4/8 cents = 1155.5 cents = $11.555/bu
-        matches = re.findall(r'(\d{3,4})-(\d)', text)
-
-        if matches:
-            # Validation: Find the first match within the historical precedent range for this commodity
-            for cents_str, eighths_str in matches:
-                cents = int(cents_str)
-                eighths = int(eighths_str)
-
-                # Validate against commodity-specific historical precedent
-                if cents_min <= cents <= cents_max:
-                    total_cents = cents + (eighths / 8.0)
-                    price_dollars = total_cents / 100.0
-
-                    # Double-check against commodity-specific range
-                    if price_min <= price_dollars <= price_max:
-                        return price_dollars
-    except requests.exceptions.RequestException:
-        # Network error, timeout, or HTTP error — fallback to None
-        pass
-    except Exception:
-        # Parsing or other error
-        pass
-
-    return None
+    return WASDE_MYA_PRICE.get(crop.lower(), None)
 
 
 # ---------------------------------------------------------------------------
@@ -737,29 +682,27 @@ with st.sidebar:
         f"usage_{scen_crop}", u_lo, u_hi, 50, default_u,
     )
 
-    # Spot price input — e.g., December futures or current cash price
-    st.markdown("**Spot / Futures Price ($/bu)**")
+    # Spot price input — uses WASDE MYA price forecast
+    st.markdown("**WASDE MYA Price Forecast ($/bu)**")
     last_actual = float(ref["price_real"])
     spot_key    = f"spot_price_{scen_crop}"
 
-    # Try to fetch current futures price from BarChart
-    contract_symbol = "ZCZ26" if scen_crop == "Corn" else "ZSX26"
-    current_price = _get_futures_price_from_barchart(contract_symbol)
+    # Fetch WASDE monthly MYA price forecast
+    wasde_price = _get_wasde_mya_price(scen_crop)
 
-    # Set default and initialize session state
-    if current_price is not None:
-        default_spot = round(np.clip(current_price, 0.50, 50.00), 2)
-        live_status = f"✅ Live {scen_crop} futures ({contract_symbol}): ${default_spot:.2f}"
+    if wasde_price is not None:
+        default_spot = round(np.clip(wasde_price, 0.50, 50.00), 2)
+        live_status = f"✅ WASDE MYA forecast: ${default_spot:.2f}"
         has_live = True
     else:
         default_spot = round(last_actual, 2)
-        live_status = f"📊 Using {int(ref['year'])} actual price (live unavailable): ${default_spot:.2f}"
+        live_status = f"⚠️ No WASDE price available; using {int(ref['year'])} actual: ${default_spot:.2f}"
         has_live = False
 
     if spot_key not in st.session_state:
         st.session_state[spot_key] = default_spot
 
-    # Show live price status prominently
+    # Show WASDE price status
     st.caption(live_status)
 
     # CSS to make spot price input box very visible
@@ -796,11 +739,11 @@ with st.sidebar:
 
     with col_btn:
         st.markdown("<div style='margin-top: 0.35rem;'></div>", unsafe_allow_html=True)  # Alignment
-        def _reset_to_live():
+        def _reset_to_wasde():
             st.session_state[spot_key] = default_spot
             st.session_state[f"_spot_num_{scen_crop}"] = default_spot
-        st.button("📡 Live\nPrice", key=f"_live_btn_{scen_crop}", on_click=_reset_to_live,
-                 use_container_width=True, help=f"Reset to market price: ${default_spot:.2f}")
+        st.button("📊 WASDE\nForecast", key=f"_live_btn_{scen_crop}", on_click=_reset_to_wasde,
+                 use_container_width=True, help=f"Reset to WASDE MYA forecast: ${default_spot:.2f}")
 
     # Model-implied price: price = b0 + b1 * K * P_spot * G
     # where G = (S/U)^(1/ε), K is a normalization constant, and P_spot is the user's spot price
@@ -1044,6 +987,11 @@ if ols_pred is not None:
 else:
     _corn_scen_row = None
     _soy_scen_row  = None
+
+# Store scenario results in session state for access by pages
+st.session_state._corn_scen_row = _corn_scen_row
+st.session_state._soy_scen_row = _soy_scen_row
+st.session_state._cached_ols_pred = ols_pred
 
 
 # ---------------------------------------------------------------------------
@@ -1598,7 +1546,7 @@ def render_tab(
 # Main layout
 # ---------------------------------------------------------------------------
 
-# Crop selection radio button
+# Main content: Crop selection and home page welcome
 col1, col2, col3 = st.columns([1, 2, 2])
 with col1:
     def _on_crop_change():
@@ -1615,23 +1563,36 @@ with col1:
         label_visibility="collapsed",
     )
 
-if scen_crop == "Corn":
-    st.markdown(f"### 🌽 Corn")
-    render_tab(
-        "Corn", corn_res, CORN_ELASTICITY,
-        scenario_supply = scen_supply,
-        scenario_usage  = scen_usage,
-        scenario_price  = ols_pred,
-        spot_price_     = spot_price,
-        scenario_row    = _corn_scen_row,
-    )
-else:
-    st.markdown(f"### 🫛 Soybeans")
-    render_tab(
-        "Soybeans", soy_res, SOYBEAN_ELASTICITY,
-        scenario_supply = scen_supply,
-        scenario_usage  = scen_usage,
-        scenario_price  = ols_pred,
-        spot_price_     = spot_price,
-        scenario_row    = _soy_scen_row,
-    )
+# Home page welcome message
+st.markdown("### Welcome to the AEI Demand Monitor")
+st.markdown("""
+This dashboard applies a **constant-elasticity demand framework** to USDA supply and usage data
+to produce model-implied price predictions for corn and soybeans.
+
+**How it works:**
+- Select your crop in the toggle above
+- Adjust supply, usage, and prices in the sidebar (left)
+- Navigate to a page using the menu (upper left) to explore:
+  - **Price Prediction** — Historical actual vs model prices with Shapley decomposition
+  - **Implied Balance** — Your scenario in the full supply/usage/price space
+  - **Safe Zones** — Market conditions visualized by supply/usage ratio bands
+
+**Key metric:** The S/U (supply-to-usage) ratio is the single most important input to the model.
+Historical analysis shows this ratio stays in a 1.07–1.19 band in normal years — use the guardrail
+references on each page to understand what your scenario implies for market balance.
+
+**About the model:**
+The model predicts equilibrium price as:
+
+P_predicted = b₀ + b₁ × K × (S/U)^(1/ε)
+
+Where S/U is the supply-to-usage ratio and ε is the demand elasticity. The Shapley decomposition
+then attributes changes in predicted price to supply-side vs demand-side (usage) drivers.
+""")
+
+st.divider()
+st.caption(
+    "Built by AEI (Ag Economic Insights). "
+    "Prices adjusted to 2025 dollars. "
+    "Source: USDA WASDE balance sheets & CPI-U."
+)
